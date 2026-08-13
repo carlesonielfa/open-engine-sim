@@ -24,7 +24,9 @@ jobs:
             os: macos-15
             preset: macos-arm64-ci
           - name: Windows x86_64
-            os: windows-latest
+            # The preset explicitly selects Visual Studio 2022. Pin the runner
+            # so a future `windows-latest` compiler transition cannot break it.
+            os: windows-2022
             preset: windows-x86_64-ci
     steps:
       - uses: actions/checkout@v4
@@ -88,7 +90,7 @@ jobs:
       - name: Install scripting parser tools
         run: |
           sudo apt-get update
-          sudo apt-get install --yes bison flex
+          sudo apt-get install --yes bison flex libfl-dev
 
       - name: Configure web host
         run: emcmake cmake --preset web
