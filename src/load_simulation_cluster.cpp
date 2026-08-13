@@ -1,6 +1,7 @@
 #include "../include/load_simulation_cluster.h"
 
 #include "../include/engine_sim_application.h"
+#include "../include/geometry_generator.h"
 #include "../include/ui_utilities.h"
 
 #include <sstream>
@@ -18,7 +19,8 @@ LoadSimulationCluster::LoadSimulationCluster() {
     m_peakTorque = 0.0;
     m_peakHorsepowerRpm = 0.0;
     m_peakTorqueRpm = 0.0;
-    memset(m_systemStatusLights, 0, sizeof(double) * 4);
+    memset(m_systemStatusLights, 0, sizeof(m_systemStatusLights));
+    m_checkMouse = true;
 }
 
 LoadSimulationCluster::~LoadSimulationCluster() {
@@ -114,6 +116,7 @@ void LoadSimulationCluster::destroy() {
 }
 
 void LoadSimulationCluster::update(float dt) {
+    m_mouseBounds = m_bounds;
     UiElement::update(dt);
 
     const float systemStatuses[] = {
@@ -155,13 +158,42 @@ void LoadSimulationCluster::update(float dt) {
     updateHpAndTorque(dt);
 }
 
+void LoadSimulationCluster::onMouseDown(const Point &mouseLocal) {
+    UiElement::onMouseDown(mouseLocal);
+    if (statusRowAt(mouseLocal) == 1) {
+        m_starterHeld = true;
+        m_app->setTouchStarterHeld(true);
+    }
+}
+
+void LoadSimulationCluster::onMouseUp(const Point &mouseLocal) {
+    UiElement::onMouseUp(mouseLocal);
+    if (m_starterHeld) {
+        m_starterHeld = false;
+        m_app->setTouchStarterHeld(false);
+    }
+}
+
+void LoadSimulationCluster::onMouseClick(const Point &mouseLocal) {
+    const int statusRow = statusRowAt(mouseLocal);
+    if (statusRow == 0) m_app->toggleIgnition();
+    else if (statusRow == 2) m_app->toggleDynamometer();
+    else if (statusRow == 3) m_app->toggleDynamometerHold();
+
+    const Bounds gear = gearBounds().inset(10.0f);
+    if (!gear.overlaps(mouseLocal)) return;
+    const Bounds up = gear.verticalSplit(0.62f, 0.86f);
+    const Bounds down = gear.verticalSplit(0.0f, 0.22f);
+    if (up.overlaps(mouseLocal)) m_app->changeGear(1);
+    else if (down.overlaps(mouseLocal)) m_app->changeGear(-1);
+}
+
 void LoadSimulationCluster::render() {
     Grid grid;
     grid.h_cells = 3;
     grid.v_cells = 2;
 
-    const Bounds gearBounds = grid.get(m_bounds, 2, 0);
-    drawCurrentGear(gearBounds);
+    drawCurrentGear(gearBounds());
 
     const Bounds clutchBounds = grid.get(m_bounds, 1, 0);
     drawClutchPressureGauge(clutchBounds);
@@ -201,11 +233,15 @@ void LoadSimulationCluster::render() {
 
 void LoadSimulationCluster::drawCurrentGear(const Bounds &bounds) {
     const Bounds insetBounds = bounds.inset(10.0f);
-    const Bounds title = insetBounds.verticalSplit(0.9f, 1.0f);
-    const Bounds body = insetBounds.verticalSplit(0.0f, 0.9f);
+    const Bounds title = insetBounds.verticalSplit(0.86f, 1.0f);
+    const Bounds up = insetBounds.verticalSplit(0.62f, 0.86f);
+    const Bounds body = insetBounds.verticalSplit(0.22f, 0.62f);
+    const Bounds down = insetBounds.verticalSplit(0.0f, 0.22f);
 
     drawFrame(bounds, 1.0f, m_app->getForegroundColor(), m_app->getBackgroundColor());
     drawCenteredText("Gear", title.inset(10.0f), 24.0f);
+    drawGearChevron(up, true);
+    drawGearChevron(down, false);
 
     const int gear = (getTransmission() != nullptr)
         ? getTransmission()->getGear()
@@ -216,6 +252,57 @@ void LoadSimulationCluster::drawCurrentGear(const Bounds &bounds) {
     else ss << "N";
 
     drawCenteredText(ss.str(), body, 64.0f, Bounds::center);
+}
+
+void LoadSimulationCluster::drawGearChevron(const Bounds &bounds, bool pointsUp) {
+    const Point center = getRenderPoint(bounds.getPosition(Bounds::center));
+    const float size = pixelsToUnits(std::fmin(bounds.width(), bounds.height()) * 0.28f);
+    const float halfWidth = size;
+    const float halfHeight = size * 0.65f;
+    const float baseY = center.y + (pointsUp ? -halfHeight : halfHeight);
+    const float pointY = center.y + (pointsUp ? halfHeight : -halfHeight);
+
+    GeometryGenerator::Line2dParameters line;
+    line.lineWidth = pixelsToUnits(3.0f);
+
+    GeometryGenerator *generator = m_app->getGeometryGenerator();
+    GeometryGenerator::GeometryIndices chevron;
+    generator->startShape();
+    line.x0 = center.x - halfWidth;
+    line.y0 = baseY;
+    line.x1 = center.x;
+    line.y1 = pointY;
+    generator->generateLine2d(line);
+    line.x0 = center.x;
+    line.y0 = pointY;
+    line.x1 = center.x + halfWidth;
+    line.y1 = baseY;
+    generator->generateLine2d(line);
+    generator->endShape(&chevron);
+
+    resetShader();
+    m_app->getShaders()->SetBaseColor(m_app->getForegroundColor());
+    m_app->drawGenerated(chevron, 0x11, m_app->getShaders()->GetUiFlags());
+}
+
+Bounds LoadSimulationCluster::gearBounds() const {
+    Grid grid = { 3, 2 };
+    return grid.get(m_bounds, 2, 0);
+}
+
+Bounds LoadSimulationCluster::systemStatusBounds() const {
+    Grid grid = { 3, 2 };
+    return grid.get(m_bounds, 0, 0);
+}
+
+int LoadSimulationCluster::statusRowAt(const Point &mouseLocal) const {
+    const Bounds status = systemStatusBounds();
+    if (!status.overlaps(mouseLocal)) return -1;
+    Grid grid = { 1, 4 };
+    for (int row = 0; row < 4; ++row) {
+        if (grid.get(status, 0, row).overlaps(mouseLocal)) return row;
+    }
+    return -1;
 }
 
 void LoadSimulationCluster::drawClutchPressureGauge(const Bounds &bounds) {

@@ -47,6 +47,7 @@ if(ENGINE_SIM_BUILD_DESKTOP)
     # Runs against SDL's dummy device, so it needs no physical audio endpoint.
     add_executable(engine-sim-desktop-audio-tests
         test/sdl_audio_output_test.cpp
+        src/sdl_audio_util.cpp
         src/sdl_audio_output.cpp)
     target_link_libraries(engine-sim-desktop-audio-tests
         PRIVATE SDL3::SDL3 engine-sim::core gtest_main)

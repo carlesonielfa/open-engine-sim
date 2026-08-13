@@ -1,20 +1,10 @@
-find_package(SDL3 3.2 CONFIG QUIET)
-if(NOT TARGET SDL3::SDL3 AND ENGINE_SIM_FETCH_SDL3)
-    FetchContent_Declare(SDL3
-        GIT_REPOSITORY https://github.com/libsdl-org/SDL.git
-        GIT_TAG release-3.2.8
-        GIT_SHALLOW TRUE
-        EXCLUDE_FROM_ALL)
-    FetchContent_MakeAvailable(SDL3)
-endif()
-if(NOT TARGET SDL3::SDL3)
-    message(FATAL_ERROR
-        "SDL3 was not found. Install SDL3 or configure with -DENGINE_SIM_FETCH_SDL3=ON.")
-endif()
+include(cmake/EngineSimSDL.cmake)
+engine_sim_require_sdl3()
 
 add_executable(engine-sim-desktop
     src/desktop_main.cpp
     src/desktop_platform_sdl.cpp
+    src/sdl_audio_util.cpp
     src/sdl_audio_output.cpp
     src/sdl_gpu_renderer.cpp)
 target_link_libraries(engine-sim-desktop PRIVATE SDL3::SDL3 engine-sim-visualization)

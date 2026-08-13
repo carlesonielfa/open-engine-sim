@@ -12,6 +12,7 @@ Simulator::Simulator() {
     m_targetSynthesizerLatency = 0.1;
     m_synthesizerLatencyCorrectionEnabled = true;
     m_simulationFrequency = 10000;
+    m_outputAudioSampleRate = 44100;
     m_steps = 0;
 
     m_currentIteration = 0;
@@ -207,7 +208,7 @@ double Simulator::getAverageOutputSignal() const {
 void Simulator::initializeSynthesizer() {
     Synthesizer::Parameters synthParams;
     synthParams.audioBufferSize = 44100;
-    synthParams.audioSampleRate = 44100;
+    synthParams.audioSampleRate = m_outputAudioSampleRate;
     synthParams.inputBufferSize = 44100;
     synthParams.inputChannelCount = m_engine->getExhaustSystemCount();
     synthParams.inputSampleRate = static_cast<float>(getSimulationFrequency());

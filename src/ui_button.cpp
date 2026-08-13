@@ -27,5 +27,5 @@ void UiButton::render() {
     }
 
     drawFrame(m_bounds, 1.0, m_app->getForegroundColor(), color);
-    drawCenteredText(m_text, m_bounds, m_fontSize);
+    drawCenteredText(m_text, m_bounds, m_fontSize, Bounds::center);
 }

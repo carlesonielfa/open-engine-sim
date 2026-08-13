@@ -3,6 +3,7 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 enum class DesktopKey {
     Escape,
@@ -22,6 +23,15 @@ enum class DesktopKey {
 
 enum class DesktopMouseButton { Left, Middle, Right };
 
+struct DesktopTouchEvent {
+    enum class Type { Down, Motion, Up, Canceled };
+
+    std::uint64_t fingerId;
+    int x;
+    int y;
+    Type type;
+};
+
 class DesktopPlatform {
 public:
     virtual ~DesktopPlatform() = default;
@@ -36,6 +46,7 @@ public:
     virtual bool wasMouseButtonPressed(DesktopMouseButton button) const = 0;
     virtual bool wasMouseButtonReleased(DesktopMouseButton button) const = 0;
     virtual void mousePosition(int *x, int *y) const = 0;
+    virtual const std::vector<DesktopTouchEvent> &touchEvents() const = 0;
     // Wheel movement is frame-local and may be observed by both application
     // shortcuts and the UI. It is reset by pumpEvents(), not consumed by the
     // first caller.

@@ -4,7 +4,7 @@
 #include "ui_element.h"
 #include "desktop_platform.h"
 
-#include <vector>
+#include <unordered_map>
 
 class EngineSimApplication;
 class UiManager {
@@ -21,12 +21,19 @@ class UiManager {
         UiElement *getRoot() { return &m_root; }
 
     protected:
+        struct TouchDrag {
+            UiElement *element;
+            Point elementPosition;
+            Point startPosition;
+        };
+
         UiElement m_root;
 
         UiElement *m_dragStart;
         UiElement *m_hover;
         Point m_mouse_p0;
         Point m_drag_p0;
+        std::unordered_map<std::uint64_t, TouchDrag> m_touchDrags;
 
     protected:
         EngineSimApplication *m_app;

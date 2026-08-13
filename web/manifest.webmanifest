@@ -1,0 +1,10 @@
+{
+  "name": "Open Engine Simulator",
+  "short_name": "Open Engine Sim",
+  "description": "A real-time engine sound simulator.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0e1012",
+  "theme_color": "#0e1012",
+  "orientation": "landscape"
+}

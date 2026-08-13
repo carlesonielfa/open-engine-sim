@@ -107,7 +107,8 @@ class Engine : public Part {
         double getInitialNoise() const { return m_initialNoise; }
         double getInitialJitter() const { return m_initialJitter; }
 
-        virtual Simulator *createSimulator(Vehicle *vehicle, Transmission *transmission);
+        virtual Simulator *createSimulator(
+            Vehicle *vehicle, Transmission *transmission, int outputAudioSampleRate = 44100);
 
     protected:
         std::string m_name;

@@ -54,7 +54,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --yes \
-            clang libfl-dev \
+            bison flex clang libfl-dev \
             libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxfixes-dev \
             libxi-dev libxss-dev libxkbcommon-dev libwayland-dev libdecor-0-dev
 
@@ -73,3 +73,33 @@ jobs:
         run: >-
           ctest --preset ${{ matrix.preset }}
           --tests-regex SdlAudioOutput
+
+  validate-web:
+    name: Validate (WebAssembly/WebGL 2)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up Emscripten
+        uses: mymindstorm/setup-emsdk@v14
+
+      - name: Install scripting parser tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes bison flex
+
+      - name: Configure web host
+        run: emcmake cmake --preset web
+
+      - name: Build web host
+        run: cmake --build --preset web --parallel
+
+      - name: Verify browser bundle
+        run: |
+          test -f build/web/web/index.html
+          test -f build/web/web/index.js
+          test -f build/web/web/index.wasm
+          test -f build/web/web/index.data
+          test -f build/web/web/manifest.webmanifest

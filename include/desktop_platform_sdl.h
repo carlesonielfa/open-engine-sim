@@ -23,6 +23,7 @@ public:
     bool wasMouseButtonPressed(DesktopMouseButton button) const override;
     bool wasMouseButtonReleased(DesktopMouseButton button) const override;
     void mousePosition(int *x, int *y) const override;
+    const std::vector<DesktopTouchEvent> &touchEvents() const override { return m_touchEvents; }
     float mouseWheelY() const override;
 
     int windowWidth() const override { return m_windowWidth; }
@@ -52,9 +53,12 @@ private:
     bool m_fullscreen;
     int m_windowWidth;
     int m_windowHeight;
+    int m_windowLogicalWidth;
+    int m_windowLogicalHeight;
     int m_mouseX;
     int m_mouseY;
     float m_mouseWheelY;
+    std::vector<DesktopTouchEvent> m_touchEvents;
 };
 
 #endif /* ATG_ENGINE_SIM_DESKTOP_PLATFORM_SDL_H */

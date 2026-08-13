@@ -419,22 +419,28 @@ bool GeometryGenerator::generateFrame(const FrameParameters &params) {
     Line2dParameters lineParams;
     lineParams.lineWidth = params.lineWidth;
 
-    lineParams.x0 = params.x - params.frameWidth / 2 - params.lineWidth / 2;
-    lineParams.x1 = params.x + params.frameWidth / 2 + params.lineWidth / 2;
+    // Keep the complete stroke inside the requested bounds. This matters for
+    // panels that meet the edge of the render target: centering a one-pixel
+    // stroke directly on that edge lets WebGL clip half (or all) of it.
+    const float halfWidth = std::fmaxf(0.0f, params.frameWidth / 2 - params.lineWidth / 2);
+    const float halfHeight = std::fmaxf(0.0f, params.frameHeight / 2 - params.lineWidth / 2);
 
-    lineParams.y0 = lineParams.y1 = params.y + params.frameHeight / 2;
+    lineParams.x0 = params.x - halfWidth;
+    lineParams.x1 = params.x + halfWidth;
+
+    lineParams.y0 = lineParams.y1 = params.y + halfHeight;
     if (!generateLine2d(lineParams)) goto fail;
 
-    lineParams.y0 = lineParams.y1 = params.y - params.frameHeight / 2;
+    lineParams.y0 = lineParams.y1 = params.y - halfHeight;
     if (!generateLine2d(lineParams)) goto fail;
 
-    lineParams.y0 = params.y - params.frameHeight / 2 - params.lineWidth / 2;
-    lineParams.y1 = params.y + params.frameHeight / 2 + params.lineWidth / 2;
+    lineParams.y0 = params.y - halfHeight;
+    lineParams.y1 = params.y + halfHeight;
 
-    lineParams.x0 = lineParams.x1 = params.x + params.frameWidth / 2;
+    lineParams.x0 = lineParams.x1 = params.x + halfWidth;
     if (!generateLine2d(lineParams)) goto fail;
 
-    lineParams.x0 = lineParams.x1 = params.x - params.frameWidth / 2;
+    lineParams.x0 = lineParams.x1 = params.x - halfWidth;
     if (!generateLine2d(lineParams)) goto fail;
 
     return true;

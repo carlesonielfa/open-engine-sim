@@ -1,7 +1,7 @@
 #ifndef ATG_ENGINE_SIM_SDL_GPU_RENDERER_H
 #define ATG_ENGINE_SIM_SDL_GPU_RENDERER_H
 
-#include "render_math.h"
+#include "renderer.h"
 
 #include <cstdint>
 #include <string>
@@ -13,22 +13,22 @@ struct SDL_GPUTransferBuffer;
 struct SDL_GPUGraphicsPipeline;
 struct SDL_GPUTexture;
 
-class SdlGpuRenderer {
+class SdlGpuRenderer final : public Renderer {
 public:
     SdlGpuRenderer();
     ~SdlGpuRenderer();
 
     bool initialize(void *nativeWindowHandle, const std::string &shaderDirectory);
     void shutdown();
-    void beginFrame(const ysVector &clearColor);
+    void beginFrame(const ysVector &clearColor) override;
     // Coordinates use SDL GPU's top-left window convention. Scene submissions
     // are clipped to this rectangle; UI submissions continue over the window.
-    void setSceneViewport(float x, float y, float width, float height);
+    void setSceneViewport(float x, float y, float width, float height) override;
     void uploadGeometry(
         const EngineSimVertex *vertices,
         int vertexCount,
         const std::uint16_t *indices,
-        int indexCount);
+        int indexCount) override;
     void submitGeometry(
         const EngineSimVertex *vertices,
         const std::uint16_t *indices,
@@ -40,8 +40,8 @@ public:
         const ysMatrix &projection,
         const ysVector &color,
         std::uint32_t stage,
-        int layer);
-    void endFrame();
+        int layer) override;
+    void endFrame() override;
     const char *lastError() const;
 
 private:

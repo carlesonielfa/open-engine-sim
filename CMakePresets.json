@@ -136,6 +136,20 @@
       "cacheVariables": {
         "ENGINE_SIM_MACOS_APP_BUNDLE": "ON"
       }
+    },
+    {
+      "name": "web",
+      "displayName": "Emscripten WebGL 2 browser host",
+      "inherits": "base",
+      "binaryDir": "${sourceDir}/build/web",
+      "cacheVariables": {
+        "BUILD_TESTING": "OFF",
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_C_FLAGS": "-sWASM_WORKERS -pthread",
+        "CMAKE_CXX_FLAGS": "-sWASM_WORKERS -pthread",
+        "ENGINE_SIM_BUILD_WEB": "ON",
+        "ENGINE_SIM_BUILD_SCRIPTING": "ON"
+      }
     }
   ],
   "buildPresets": [
@@ -180,6 +194,10 @@
     {
       "name": "macos-arm64-package",
       "configurePreset": "macos-arm64-package"
+    },
+    {
+      "name": "web",
+      "configurePreset": "web"
     }
   ],
   "testPresets": [

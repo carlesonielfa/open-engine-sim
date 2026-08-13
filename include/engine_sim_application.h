@@ -25,7 +25,7 @@
 
 #include <string>
 #include "runtime_paths.h"
-#include "sdl_gpu_renderer.h"
+#include "renderer.h"
 #include "text_renderer.h"
 #include "authored_mesh_library.h"
 #include "transmission.h"
@@ -44,10 +44,14 @@ class EngineSimApplication {
 
         void initialize(
             DesktopPlatform *platform,
-            SdlGpuRenderer *renderer,
+            Renderer *renderer,
             AudioOutput *audioOutput,
             const RuntimePaths &runtimePaths);
         void run();
+        // Runs one platform frame. Returns false once the host should stop.
+        // Browser hosts call this from requestAnimationFrame instead of using
+        // the blocking native run() loop.
+        bool tick();
         void destroy();
 
         void loadEngine(Engine *engine, Vehicle *vehicle, Transmission *transmission);
@@ -99,6 +103,14 @@ class EngineSimApplication {
         InfoCluster *getInfoCluster() { return m_infoCluster; }
         ApplicationSettings* getAppSettings() { return &m_applicationSettings; }
 
+        void toggleIgnition();
+        void toggleDynamometer();
+        void toggleDynamometerHold();
+        void toggleFullscreen();
+        void changeGear(int direction);
+        void setTouchStarterHeld(bool held);
+        void setTouchThrottle(double value, bool held);
+
     protected:
         void loadScript();
         void processEngineInput(float dt);
@@ -109,6 +121,9 @@ class EngineSimApplication {
     protected:
         double m_speedSetting = 1.0;
         double m_targetSpeedSetting = 1.0;
+        double m_touchThrottle = 0.0;
+        bool m_touchThrottleHeld = false;
+        bool m_touchStarterHeld = false;
 
         double m_clutchPressure = 1.0;
         double m_targetClutchPressure = 1.0;
@@ -128,7 +143,7 @@ class EngineSimApplication {
         Shaders m_shaders;
 
         DesktopPlatform *m_platform;
-        SdlGpuRenderer *m_renderer;
+        Renderer *m_renderer;
         AudioOutput *m_audioOutput;
 
         std::string m_assetPath;
@@ -175,6 +190,8 @@ class EngineSimApplication {
         int m_oscillatorSampleOffset;
         int m_screen;
         float m_averageFramerate = 60.0f;
+        std::uint64_t m_lastTick = 0;
+        std::uint64_t m_lastRenderTick = 0;
 
 #ifdef ATG_ENGINE_SIM_VIDEO_CAPTURE
         atg_dtv::Encoder m_encoder;

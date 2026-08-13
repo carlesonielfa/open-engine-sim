@@ -23,6 +23,7 @@ RightGaugeCluster::RightGaugeCluster() {
     m_throttleDisplay = nullptr;
     m_fuelCluster = nullptr;
     m_isAbsolute = false;
+    m_checkMouse = true;
 }
 
 RightGaugeCluster::~RightGaugeCluster() {
@@ -165,6 +166,7 @@ void RightGaugeCluster::destroy() {
 }
 
 void RightGaugeCluster::update(float dt) {
+    m_mouseBounds = m_bounds;
     m_combusionChamberStatus->m_engine = m_engine;
     m_throttleDisplay->m_engine = m_engine;
     m_afrCluster->m_engine = m_engine;
@@ -172,6 +174,26 @@ void RightGaugeCluster::update(float dt) {
     m_fuelCluster->m_simulator = m_simulator;
 
     UiElement::update(dt);
+}
+
+void RightGaugeCluster::onMouseDown(const Point &mouseLocal) {
+    UiElement::onMouseDown(mouseLocal);
+    if (throttleControlBounds().overlaps(mouseLocal)) {
+        m_throttleHeld = true;
+        setTouchThrottleFromPoint(mouseLocal);
+    }
+}
+
+void RightGaugeCluster::onMouseUp(const Point &mouseLocal) {
+    UiElement::onMouseUp(mouseLocal);
+    if (m_throttleHeld) {
+        m_throttleHeld = false;
+        m_app->setTouchThrottle(0.0, false);
+    }
+}
+
+void RightGaugeCluster::onDrag(const Point &, const Point &, const Point &mouse) {
+    if (m_throttleHeld) setTouchThrottleFromPoint(mouse);
 }
 
 void RightGaugeCluster::render() {
@@ -184,6 +206,7 @@ void RightGaugeCluster::render() {
     renderFuelAirCluster(fuelAirCluster);
 
     UiElement::render();
+    renderTouchThrottleControl();
 }
 
 void RightGaugeCluster::setEngine(Engine *engine) {
@@ -277,6 +300,30 @@ void RightGaugeCluster::renderFuelAirCluster(const Bounds &bounds) {
     const Bounds volumetricEfficiencyBounds = grid.get(right, 0, 2, 1, 1);
     m_volumetricEffGauge->m_bounds = volumetricEfficiencyBounds;
     m_volumetricEffGauge->m_gauge->m_value = 100.0f * (float)volumetricEfficiency;
+}
+
+Bounds RightGaugeCluster::throttleControlBounds() const {
+    const Bounds fuelAir = m_bounds.verticalSplit(0.0f, 0.5f);
+    const Bounds left = fuelAir.horizontalSplit(0.0f, 0.5f);
+    const Bounds throttle = left.verticalSplit(0.5f, 1.0f);
+    return throttle.horizontalSplit(0.84f, 0.96f).verticalSplit(0.12f, 0.82f);
+}
+
+void RightGaugeCluster::setTouchThrottleFromPoint(const Point &mouseLocal) {
+    const Bounds control = throttleControlBounds();
+    const float value = clamp((mouseLocal.y - control.bottom()) / control.height());
+    m_app->setTouchThrottle(value, true);
+}
+
+void RightGaugeCluster::renderTouchThrottleControl() {
+    const Bounds control = throttleControlBounds();
+    Engine *engine = m_engine;
+    const float value = engine == nullptr ? 0.0f : static_cast<float>(engine->getSpeedControl());
+    const Bounds fill(control.width() - 4.0f, (control.height() - 4.0f) * value,
+        { control.center_h(), control.bottom() + 2.0f }, Bounds::bm);
+
+    drawFrame(control, 1.0f, m_app->getForegroundColor(), m_app->getBackgroundColor());
+    if (value > 0.0f) drawBox(fill, m_app->getRed());
 }
 
 double RightGaugeCluster::getManifoldPressureWithUnits(double ambientPressure) {

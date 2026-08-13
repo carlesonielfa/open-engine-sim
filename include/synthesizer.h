@@ -8,12 +8,15 @@
 #include "jitter_filter.h"
 #include "ring_buffer.h"
 #include "butterworth_low_pass_filter.h"
+#include "spsc_audio_ring.h"
 
 #include <cinttypes>
+#if !defined(__EMSCRIPTEN__)
 #include <thread>
 #include <mutex>
-#include <atomic>
 #include <condition_variable>
+#endif
+#include <atomic>
 
 class Synthesizer {
     public:
@@ -41,6 +44,7 @@ class Synthesizer {
 
         struct InputChannel {
             RingBuffer<float> data;
+            SpscAudioRing<float> realtimeData;
             float *transferBuffer = nullptr;
             double lastInputSample = 0.0f;
         };
@@ -66,14 +70,20 @@ class Synthesizer {
             int index);
         void startAudioRenderingThread();
         void endAudioRenderingThread();
+        // Browser builds do not use Wasm pthreads. Their host invokes this
+        // non-blocking producer from its browser frame instead.
+        bool pumpAudioRendering();
+        // Called only by a real-time audio host. `target` is preallocated by
+        // the host and must hold `samples` mono float samples.
+        void renderRealtimeAudio(float *target, int samples);
+        void clearRealtimeInput();
+        void discardAudioOutput();
         void destroy();
 
         int readAudioOutput(int samples, int16_t *buffer);
 
         void writeInput(const double *data);
         void endInputBlock();
-
-        void waitProcessed();
 
         void audioRenderingThread();
         void renderAudio();
@@ -90,7 +100,7 @@ class Synthesizer {
         double getInputSampleRate() const { return m_inputSampleRate; }
         // A real-time host may discard stale samples rather than let source
         // latency grow indefinitely. A negative value leaves it unbounded.
-        void setMaximumInputLatency(double seconds) { m_maximumInputLatency = seconds; }
+        void setMaximumInputLatency(double seconds);
 
         int16_t renderAudio(int inputOffset, const AudioParameters &parameters);
 
@@ -116,22 +126,45 @@ class Synthesizer {
         float m_inputSampleRate;
         float m_audioSampleRate;
         double m_maximumInputLatency;
+        std::atomic<int> m_realtimeMaximumInputLatency{-1};
 
+        // Native hosts retain the legacy worker/PCM queue. The web host uses
+        // the lock-free realtime hand-off above and must not link pthreads.
+#if !defined(__EMSCRIPTEN__)
         std::thread *m_thread;
+#endif
         std::atomic<bool> m_run;
         std::atomic<int> m_audioBufferedSamples;
+        std::atomic<int> m_realtimeLatency{0};
+        std::atomic<uint32_t> m_audioNoiseState{0x6d2b79f5u};
         bool m_processed;
 
         // Input is produced on the simulation thread, rendered on a worker,
         // then consumed by the platform audio output. Keep each hand-off
         // independent so convolution work never blocks the device reader.
+#if !defined(__EMSCRIPTEN__)
         mutable std::mutex m_inputLock;
         mutable std::mutex m_lock0;
         mutable std::mutex m_parameterLock;
         mutable std::mutex m_renderLock;
         std::condition_variable m_cv0;
+#endif
 
         ProcessingFilters *m_filters;
+
+        // These atomics are the only simulation/UI-to-realtime parameter
+        // hand-off. Do not replace them with a mutex: AudioWorklets cannot
+        // wait without causing audible dropouts.
+        std::atomic<float> m_realtimeVolume{1.0f};
+        std::atomic<float> m_realtimeConvolution{1.0f};
+        std::atomic<float> m_realtimeDfFMix{0.01f};
+        std::atomic<float> m_realtimeInputNoise{0.5f};
+        std::atomic<float> m_realtimeInputNoiseCutoff{10000.0f};
+        std::atomic<float> m_realtimeAirNoise{1.0f};
+        std::atomic<float> m_realtimeAirNoiseCutoff{2000.0f};
+        std::atomic<float> m_realtimeLevelerTarget{30000.0f};
+        std::atomic<float> m_realtimeLevelerMaxGain{1.9f};
+        std::atomic<float> m_realtimeLevelerMinGain{0.00001f};
 };
 
 #endif /* ATG_ENGINE_SIM_ENGINE_SYNTHESIZER_H */

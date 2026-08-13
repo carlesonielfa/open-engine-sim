@@ -128,3 +128,33 @@ jobs:
           --verify-tag
           --title "Open Engine Simulator $RELEASE_TAG"
           --generate-notes
+
+  publish-web:
+    name: Publish web build
+    needs: release
+    if: github.event_name == 'push' || inputs.publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || inputs.tag || github.ref }}
+          submodules: recursive
+
+      - name: Set up Emscripten
+        uses: mymindstorm/setup-emsdk@v14
+
+      - name: Build web host
+        run: |
+          emcmake cmake --preset web
+          cmake --build --preset web --parallel
+
+      - name: Deploy to Cloudflare Pages
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          npx wrangler@4 pages deploy build/web/web \
+            --project-name=open-engine-sim \
+            --commit-hash="$(git rev-parse HEAD)" \
+            --commit-message="Release $RELEASE_TAG"

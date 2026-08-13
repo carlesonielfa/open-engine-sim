@@ -1,4 +1,5 @@
 #include "../include/sdl_audio_output.h"
+#include "../include/sdl_audio_util.h"
 #include "../include/simulator.h"
 
 #include <SDL3/SDL.h>
@@ -6,8 +7,6 @@
 #include <array>
 #include <chrono>
 #include <cstdio>
-#include <cstdint>
-#include <string>
 
 bool SdlAudioOutput::start(Simulator *simulator) {
     std::lock_guard<std::mutex> lock(m_lifecycleMutex);
@@ -38,11 +37,6 @@ bool SdlAudioOutput::start(Simulator *simulator) {
     m_running = true;
     m_thread = std::thread(&SdlAudioOutput::audioThread, this);
     return true;
-}
-
-void SdlAudioOutput::pump() {
-    // The worker owns device queueing so UI/render frame time cannot affect
-    // audio delivery. This remains part of the platform-neutral host seam.
 }
 
 void SdlAudioOutput::audioThread() {
@@ -97,24 +91,7 @@ void SdlAudioOutput::fillStream() {
 }
 
 bool SdlAudioOutput::loadImpulseResponse(Synthesizer &synthesizer, const std::string &path, float volume, int index) {
-    SDL_AudioSpec spec = {};
-    Uint8 *data = nullptr;
-    Uint32 size = 0;
-    if (!SDL_LoadWAV(path.c_str(), &spec, &data, &size)) return false;
-    const SDL_AudioSpec target = { SDL_AUDIO_S16, 1, 44100 };
-    SDL_AudioStream *converter = SDL_CreateAudioStream(&spec, &target);
-    if (converter == nullptr) { SDL_free(data); return false; }
-    const bool queued = SDL_PutAudioStreamData(converter, data, static_cast<int>(size));
-    const bool flushed = queued && SDL_FlushAudioStream(converter);
-    SDL_free(data);
-    const int convertedBytes = flushed ? SDL_GetAudioStreamAvailable(converter) : 0;
-    std::vector<std::int16_t> samples(static_cast<size_t>(std::max(0, convertedBytes)) / sizeof(std::int16_t));
-    const int received = samples.empty() ? 0
-        : SDL_GetAudioStreamData(converter, samples.data(), static_cast<int>(samples.size() * sizeof(std::int16_t)));
-    SDL_DestroyAudioStream(converter);
-    if (received <= 0) return false;
-    synthesizer.initializeImpulseResponse(samples.data(), received / sizeof(std::int16_t), volume, index);
-    return true;
+    return loadSdlImpulseResponse(synthesizer, path, volume, index);
 }
 
 void SdlAudioOutput::stop() {

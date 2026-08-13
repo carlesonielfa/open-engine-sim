@@ -38,7 +38,6 @@ TEST(SdlAudioOutput, ConvertsWavAndClosesDummyDevice) {
 
     SilentSimulator simulator;
     EXPECT_TRUE(output.start(&simulator));
-    output.pump();
     output.stop();
     output.stop();
 

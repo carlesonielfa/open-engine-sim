@@ -7,6 +7,7 @@ include(FetchContent)
 include(cmake/EngineSimShaders.cmake)
 
 option(ENGINE_SIM_BUILD_DESKTOP "Build the SDL3 desktop host" OFF)
+option(ENGINE_SIM_BUILD_WEB "Build the Emscripten/WebGL 2 browser host" OFF)
 option(ENGINE_SIM_BUILD_SCRIPTING "Build the Piranha script interpreter" OFF)
 option(ENGINE_SIM_FETCH_SDL3 "Fetch pinned SDL3 when it is not installed" ON)
 option(ENGINE_SIM_MACOS_APP_BUNDLE "Build the desktop host as a macOS .app bundle" OFF)
@@ -146,6 +147,10 @@ endif()
 if(ENGINE_SIM_BUILD_DESKTOP)
     include(cmake/EngineSimDesktop.cmake)
     include(cmake/EngineSimPackaging.cmake)
+endif()
+
+if(ENGINE_SIM_BUILD_WEB)
+    include(cmake/EngineSimWeb.cmake)
 endif()
 
 if(BUILD_TESTING)

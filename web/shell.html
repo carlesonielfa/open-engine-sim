@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0e1012">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Open Engine Sim">
+  <link rel="manifest" href="manifest.webmanifest">
+  <title>Open Engine Simulator</title>
+  <style>
+    html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: #0e1012; }
+    #app-viewport {
+      position: fixed;
+      inset: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px)
+        env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px);
+      overflow: hidden;
+    }
+    canvas { position: absolute; inset: 0; }
+    canvas { display: block; outline: none; }
+    #audio-overlay, #install-hint, #orientation-overlay {
+      position: fixed;
+      inset: 0;
+      box-sizing: border-box;
+      padding: max(1.25rem, env(safe-area-inset-top, 0px))
+        max(1.25rem, env(safe-area-inset-right, 0px))
+        max(1.25rem, env(safe-area-inset-bottom, 0px))
+        max(1.25rem, env(safe-area-inset-left, 0px));
+      color: #fff;
+      background: rgba(14,16,18,.88);
+      font: 16px system-ui, sans-serif;
+      text-align: center;
+    }
+    #audio-overlay { display: grid; place-content: center; gap: .75rem; z-index: 3; }
+    #audio-overlay[hidden] { display: none; }
+    #audio-overlay button, #install-hint button {
+      padding: .75rem 1rem;
+      border: 1px solid #f394be;
+      background: #0e1012;
+      color: #fff;
+      cursor: pointer;
+      font: inherit;
+    }
+    #audio-status { min-height: 1.2em; max-width: 32rem; color: #f394be; }
+    #audio-debug { position: fixed; right: .75rem; bottom: .75rem; max-width: 28rem; padding: .6rem; color: #f394be; background: rgba(14,16,18,.9); border: 1px solid #f394be; font: 12px ui-monospace, monospace; white-space: pre-wrap; }
+    #install-hint { display: grid; place-content: center; gap: .75rem; z-index: 4; }
+    #install-hint[hidden] { display: none; }
+    #install-hint p { max-width: 23rem; margin: 0; line-height: 1.45; }
+    #install-hint-card {
+      display: grid;
+      justify-items: center;
+      gap: .75rem;
+      max-width: 24rem;
+      padding: 1.25rem;
+      border: 1px solid #f394be;
+      background: #0e1012;
+      box-shadow: 0 0 0 100vmax rgba(14,16,18,.88);
+    }
+    body[data-install-hint] #install-hint {
+      display: grid !important;
+      visibility: visible !important;
+      opacity: 1 !important;
+    }
+    #orientation-overlay { display: none; z-index: 5; }
+    @media (pointer: coarse) and (orientation: portrait) {
+      #orientation-overlay { display: grid; place-content: center; gap: .75rem; }
+    }
+  </style>
+</head>
+<body>
+  <div id="app-viewport">
+    <canvas id="canvas" tabindex="-1" oncontextmenu="event.preventDefault()"></canvas>
+  </div>
+  <div id="audio-overlay">
+    <strong>Open Engine Simulator</strong>
+    <span>Audio requires a browser interaction.</span>
+    <button id="enable-audio" type="button" onclick="enableAudio()">Enable audio</button>
+    <span id="audio-status"></span>
+  </div>
+  <div id="install-hint" hidden role="dialog" aria-modal="true" aria-labelledby="install-hint-title">
+    <div id="install-hint-card">
+      <strong id="install-hint-title">Install for the full-screen dashboard</strong>
+      <p>In Safari, tap <strong>Share</strong>, choose <strong>Add to Home Screen</strong>, then open Open Engine Simulator from its Home Screen icon.</p>
+      <button id="dismiss-install-hint" type="button">Got it</button>
+    </div>
+  </div>
+  <div id="orientation-overlay" role="status" aria-live="polite">
+    <strong>Rotate to landscape</strong>
+    <span>Open Engine Simulator is designed for a wide dashboard.</span>
+  </div>
+  <pre id="audio-debug" hidden></pre>
+  <script>
+    const canvas = document.getElementById('canvas');
+    const appViewport = document.getElementById('app-viewport');
+    let viewportWidth = 0;
+    let viewportHeight = 0;
+    function syncCanvasViewport() {
+      const { width, height } = appViewport.getBoundingClientRect();
+      const nextWidth = Math.round(width);
+      const nextHeight = Math.round(height);
+      if (nextWidth === viewportWidth && nextHeight === viewportHeight) return;
+
+      viewportWidth = nextWidth;
+      viewportHeight = nextHeight;
+      // SDL learns about external CSS resizes from the window resize event.
+      // An iOS safe-area update does not necessarily emit one itself.
+      canvas.style.width = nextWidth + 'px';
+      canvas.style.height = nextHeight + 'px';
+      window.dispatchEvent(new Event('resize'));
+    }
+    new ResizeObserver(syncCanvasViewport).observe(appViewport);
+    window.addEventListener('orientationchange', function () {
+      window.requestAnimationFrame(syncCanvasViewport);
+    });
+    syncCanvasViewport();
+    var Module = {
+      canvas: canvas,
+      printErr: function (text) { console.error(text); },
+      onRuntimeInitialized: function () {
+        syncCanvasViewport();
+        Module._main();
+      }
+    };
+    window.openEngineSimulatorShowInstallHint = function () {
+      const hint = document.getElementById('install-hint');
+      hint.hidden = false;
+      document.body.dataset.installHint = 'true';
+      document.getElementById('dismiss-install-hint').focus({ preventScroll: true });
+    };
+    document.getElementById('dismiss-install-hint').addEventListener('click', function () {
+      document.getElementById('install-hint').hidden = true;
+      delete document.body.dataset.installHint;
+    });
+    function enableAudio() {
+      const overlay = document.getElementById('audio-overlay');
+      const button = document.getElementById('enable-audio');
+      const status = document.getElementById('audio-status');
+      // iOS otherwise treats Web Audio as ambient sound, which is muted by
+      // the Ring/Silent switch even when the AudioContext is running.
+      if (navigator.audioSession) {
+        try { navigator.audioSession.type = 'playback'; } catch (_) {}
+      }
+      Module.ccall('engine_sim_enable_audio');
+      button.disabled = true;
+      status.textContent = 'Preparing real-time audio…';
+      const waitForAudio = window.setInterval(function () {
+        const state = Module.ccall('engine_sim_web_audio_state', 'number');
+        if (state === 2) {
+          window.clearInterval(waitForAudio);
+          overlay.hidden = true;
+        }
+        else if (state === 3) {
+          window.clearInterval(waitForAudio);
+          button.disabled = false;
+          status.textContent = 'The browser could not start real-time audio.';
+        }
+      }, 50);
+    }
+    if (new URLSearchParams(location.search).has('audio-debug')) {
+      const debug = document.getElementById('audio-debug');
+      debug.hidden = false;
+      const contextStates = ['suspended', 'running', 'closed', 'interrupted'];
+      window.setInterval(function () {
+        if (!Module.ccall) return;
+        const value = function (name, type) { return Module.ccall(name, type || 'number'); };
+        const contextState = value('engine_sim_web_audio_context_state');
+        debug.textContent = [
+          'web audio diagnostics',
+          'host state: ' + value('engine_sim_web_audio_state'),
+          'context: ' + (contextStates[contextState] || contextState),
+          'audio session: ' + (navigator.audioSession ? navigator.audioSession.type : 'unavailable'),
+          'sample rate: ' + value('engine_sim_web_audio_sample_rate') + ' Hz',
+          'worklet thread: ' + Boolean(value('engine_sim_web_audio_has_worklet_thread')),
+          'worklet node: ' + Boolean(value('engine_sim_web_audio_has_node')),
+          'callbacks: ' + value('engine_sim_web_audio_callback_count', 'number'),
+          'last peak: ' + (value('engine_sim_web_audio_peak_milli') / 1000).toFixed(3)
+        ].join('\n');
+      }, 250);
+    }
+  </script>
+  {{{ SCRIPT }}}
+</body>
+</html>

@@ -35,6 +35,26 @@ TEST(SynthesizerTests, SynthesizerSanityCheck) {
     synth.destroy();
 }
 
+TEST(SynthesizerTests, RealtimeQueueCanDiscardStaleFrames) {
+    SpscAudioRing<int> queue;
+    queue.initialize(16);
+
+    for (int value = 0; value < 10; ++value) {
+        ASSERT_TRUE(queue.push(value));
+    }
+
+    EXPECT_EQ(queue.discard(7), 7u);
+    EXPECT_EQ(queue.size(), 3u);
+
+    int value = -1;
+    ASSERT_TRUE(queue.pop(value));
+    EXPECT_EQ(value, 7);
+    ASSERT_TRUE(queue.pop(value));
+    EXPECT_EQ(value, 8);
+    ASSERT_TRUE(queue.pop(value));
+    EXPECT_EQ(value, 9);
+}
+
 TEST(SynthesizerTests, ThreadedProducerAndConsumerMaintainOutput) {
     Synthesizer synth;
     Synthesizer::Parameters params;
@@ -91,6 +111,24 @@ TEST(SynthesizerTests, ThreadedProducerAndConsumerMaintainOutput) {
     EXPECT_LE(longestNearZeroRun, 20);
 
     synth.endAudioRenderingThread();
+    synth.destroy();
+}
+
+TEST(SynthesizerTests, PumpedProducerMaintainsOutputWithoutWorkerThread) {
+    Synthesizer synth;
+    setupStandardSynthesizer(synth);
+    synth.discardAudioOutput();
+
+    for (int i = 0; i < 64; ++i) {
+        const double sample[] = { 1000.0, 1000.0, 1000.0, 1000.0,
+            1000.0, 1000.0, 1000.0, 1000.0 };
+        synth.writeInput(sample);
+    }
+    synth.endInputBlock();
+
+    EXPECT_TRUE(synth.pumpAudioRendering());
+    int16_t output[16] = {};
+    EXPECT_EQ(synth.readAudioOutput(16, output), 16);
     synth.destroy();
 }
 /*

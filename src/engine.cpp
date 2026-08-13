@@ -382,11 +382,14 @@ int Engine::getMaxDepth() const {
     return maxDepth;
 }
 
-Simulator *Engine::createSimulator(Vehicle *vehicle, Transmission *transmission) {
+Simulator *Engine::createSimulator(
+    Vehicle *vehicle, Transmission *transmission, int outputAudioSampleRate)
+{
     PistonEngineSimulator *simulator = new PistonEngineSimulator;
     Simulator::Parameters simulatorParams;
     simulatorParams.systemType = Simulator::SystemType::NsvOptimized;
     simulator->initialize(simulatorParams);
+    simulator->setOutputAudioSampleRate(outputAudioSampleRate);
 
     simulator->loadSimulation(this, vehicle, transmission);
     simulator->setFluidSimulationSteps(8);

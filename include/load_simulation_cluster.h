@@ -18,6 +18,9 @@ class LoadSimulationCluster : public UiElement {
 
         virtual void update(float dt);
         virtual void render();
+        virtual void onMouseDown(const Point &mouseLocal);
+        virtual void onMouseUp(const Point &mouseLocal);
+        virtual void onMouseClick(const Point &mouseLocal);
         void setUnits();
 
         void setSimulator(Simulator *simulator) { m_simulator = simulator; }
@@ -27,10 +30,14 @@ class LoadSimulationCluster : public UiElement {
 
     protected:
         void drawCurrentGear(const Bounds &bounds);
+        void drawGearChevron(const Bounds &bounds, bool pointsUp);
         void drawClutchPressureGauge(const Bounds &bounds);
         void drawSystemStatus(const Bounds &bounds);
         void updateHpAndTorque(float dt);
         bool isIgnitionOn() const;
+        Bounds gearBounds() const;
+        Bounds systemStatusBounds() const;
+        int statusRowAt(const Point &mouseLocal) const;
 
         float m_systemStatusLights[4];
         LabeledGauge *m_dynoSpeedGauge;
@@ -50,6 +57,7 @@ class LoadSimulationCluster : public UiElement {
         std::string m_torqueUnits;
 
         Simulator *m_simulator;
+        bool m_starterHeld = false;
 };
 
 #endif /* ATG_ENGINE_SIM_LOAD_SIMULATION_CLUSTER_H */

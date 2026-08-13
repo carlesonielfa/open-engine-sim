@@ -56,6 +56,7 @@ public:
 
     void setSimulationFrequency(int frequency) { m_simulationFrequency = frequency; }
     int getSimulationFrequency() const { return m_simulationFrequency; }
+    void setOutputAudioSampleRate(int sampleRate) { m_outputAudioSampleRate = sampleRate; }
 
     double getTimestep() const { return 1.0 / m_simulationFrequency; }
 
@@ -112,6 +113,7 @@ private:
     double m_physicsProcessingTime;
 
     int m_simulationFrequency;
+    int m_outputAudioSampleRate;
 
     double m_targetSynthesizerLatency;
     bool m_synthesizerLatencyCorrectionEnabled;

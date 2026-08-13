@@ -49,7 +49,7 @@ EngineSimApplication::~EngineSimApplication() { destroy(); }
 
 void EngineSimApplication::initialize(
     DesktopPlatform *platform,
-    SdlGpuRenderer *renderer,
+    Renderer *renderer,
     AudioOutput *audioOutput,
     const RuntimePaths &runtimePaths)
 {
@@ -85,41 +85,49 @@ void EngineSimApplication::initialize() {
 }
 
 void EngineSimApplication::run() {
-    std::uint64_t lastTick = m_platform->ticks();
-    std::uint64_t lastRenderTick = 0;
-    constexpr std::uint64_t renderIntervalMs = 50;
-    while (!m_platform->shouldQuit() && !m_platform->wasKeyPressed(DesktopKey::Escape)) {
-        m_platform->pumpEvents();
-        const std::uint64_t now = m_platform->ticks();
-        // Drive physics from elapsed time so synthesis remains in step with
-        // wall time and does not accumulate audio latency.
-        const float dt = std::min(static_cast<float>(now - lastTick) / 1000.0f, 0.25f);
-        lastTick = now;
-        if (dt > 0.0f) {
-            m_averageFramerate = 0.9f * m_averageFramerate + 0.1f / dt;
-        }
-
-        if (m_platform->wasKeyPressed(DesktopKey::F)) m_platform->setFullscreen(!m_platform->isFullscreen());
-        if (m_platform->wasKeyPressed(DesktopKey::Tab)) m_screen = (m_screen + 1) % 3;
-        if (m_platform->wasKeyPressed(DesktopKey::Return)) loadScript();
-        m_screenWidth = m_platform->windowWidth();
-        m_screenHeight = m_platform->windowHeight();
-
-        if (dt > 0.0f) {
-            processEngineInput(dt);
-            if (!m_paused || m_platform->wasKeyPressed(DesktopKey::Right)) process(dt);
-        }
-        if (m_audioOutput != nullptr) m_audioOutput->pump();
-        if (m_engineView != nullptr) m_uiManager.update(dt);
-        // Rendering is substantially more expensive than the audio-producing
-        // simulation on the SDL path. Reserve CPU slices for simulation so
-        // the audio stream is never starved by presentation work.
-        if (now - lastRenderTick >= renderIntervalMs) {
-            renderScene();
-            lastRenderTick = now;
-        }
+    while (tick()) {
         m_platform->delay(1);
     }
+}
+
+bool EngineSimApplication::tick() {
+    if (m_platform == nullptr) return false;
+    if (m_lastTick == 0) m_lastTick = m_platform->ticks();
+#if defined(__EMSCRIPTEN__)
+    constexpr std::uint64_t renderIntervalMs = 0;
+#else
+    constexpr std::uint64_t renderIntervalMs = 50;
+#endif
+    m_platform->pumpEvents();
+    if (m_platform->shouldQuit() || m_platform->wasKeyPressed(DesktopKey::Escape)) return false;
+    const std::uint64_t now = m_platform->ticks();
+        // Drive physics from elapsed time so synthesis remains in step with
+        // wall time and does not accumulate audio latency.
+    const float dt = std::min(static_cast<float>(now - m_lastTick) / 1000.0f, 0.25f);
+    m_lastTick = now;
+    if (dt > 0.0f) {
+        m_averageFramerate = 0.9f * m_averageFramerate + 0.1f / dt;
+    }
+
+    if (m_platform->wasKeyPressed(DesktopKey::F)) toggleFullscreen();
+    if (m_platform->wasKeyPressed(DesktopKey::Tab)) m_screen = (m_screen + 1) % 3;
+    if (m_platform->wasKeyPressed(DesktopKey::Return)) loadScript();
+    m_screenWidth = m_platform->windowWidth();
+    m_screenHeight = m_platform->windowHeight();
+
+    if (dt > 0.0f) {
+        processEngineInput(dt);
+        if (!m_paused || m_platform->wasKeyPressed(DesktopKey::Right)) process(dt);
+    }
+    if (m_engineView != nullptr) m_uiManager.update(dt);
+    // Rendering is substantially more expensive than the audio-producing
+    // simulation on the SDL path. Reserve CPU slices for simulation so
+    // the audio stream is never starved by presentation work.
+    if (now - m_lastRenderTick >= renderIntervalMs) {
+        renderScene();
+        m_lastRenderTick = now;
+    }
+    return true;
 }
 
 void EngineSimApplication::destroy() {
@@ -362,19 +370,17 @@ void EngineSimApplication::processEngineInput(float dt) {
     else if (m_platform->isKeyDown(DesktopKey::E)) m_targetSpeedSetting = 0.2;
     else if (m_platform->isKeyDown(DesktopKey::R)) m_targetSpeedSetting = 1.0;
     else if (fineControl && !consumedWheel) m_targetSpeedSetting = clamp(m_targetSpeedSetting + wheel * 0.0001);
+    if (m_touchThrottleHeld) m_targetSpeedSetting = m_touchThrottle;
     m_speedSetting = m_targetSpeedSetting * 0.5 + m_speedSetting * 0.5;
     m_iceEngine->setSpeedControl(m_speedSetting);
 
     if (m_platform->wasKeyPressed(DesktopKey::M) && m_viewParameters.Layer0 + 1 < m_iceEngine->getMaxDepth()) ++m_viewParameters.Layer0;
     if (m_platform->wasKeyPressed(DesktopKey::Comma) && m_viewParameters.Layer0 > 0) --m_viewParameters.Layer0;
-    if (m_platform->wasKeyPressed(DesktopKey::D)) m_simulator->m_dyno.m_enabled = !m_simulator->m_dyno.m_enabled;
-    if (m_platform->wasKeyPressed(DesktopKey::H)) m_simulator->m_dyno.m_hold = !m_simulator->m_dyno.m_hold;
-    if (m_platform->wasKeyPressed(DesktopKey::A)) {
-        auto *ignition = m_simulator->getEngine()->getIgnitionModule();
-        ignition->m_enabled = !ignition->m_enabled;
-    }
-    if (m_platform->wasKeyPressed(DesktopKey::Up)) m_simulator->getTransmission()->changeGear(m_simulator->getTransmission()->getGear() + 1);
-    if (m_platform->wasKeyPressed(DesktopKey::Down)) m_simulator->getTransmission()->changeGear(m_simulator->getTransmission()->getGear() - 1);
+    if (m_platform->wasKeyPressed(DesktopKey::D)) toggleDynamometer();
+    if (m_platform->wasKeyPressed(DesktopKey::H)) toggleDynamometerHold();
+    if (m_platform->wasKeyPressed(DesktopKey::A)) toggleIgnition();
+    if (m_platform->wasKeyPressed(DesktopKey::Up)) changeGear(1);
+    if (m_platform->wasKeyPressed(DesktopKey::Down)) changeGear(-1);
 
     if (m_platform->isKeyDown(DesktopKey::T)) m_targetClutchPressure -= 0.2 * dt;
     else if (m_platform->isKeyDown(DesktopKey::U)) m_targetClutchPressure += 0.2 * dt;
@@ -392,7 +398,34 @@ void EngineSimApplication::processEngineInput(float dt) {
     } else if (!m_simulator->m_dyno.m_hold) m_dynoSpeed = units::rpm(0);
     m_simulator->m_dyno.m_rotationSpeed = clamp(m_dynoSpeed,
         m_iceEngine->getDynoMinSpeed(), m_iceEngine->getDynoMaxSpeed());
-    m_simulator->m_starterMotor.m_enabled = m_platform->isKeyDown(DesktopKey::S);
+    m_simulator->m_starterMotor.m_enabled = m_platform->isKeyDown(DesktopKey::S) || m_touchStarterHeld;
+}
+
+void EngineSimApplication::toggleIgnition() {
+    if (m_simulator == nullptr || m_simulator->getEngine() == nullptr) return;
+    auto *ignition = m_simulator->getEngine()->getIgnitionModule();
+    ignition->m_enabled = !ignition->m_enabled;
+}
+
+void EngineSimApplication::toggleDynamometer() {
+    if (m_simulator != nullptr) m_simulator->m_dyno.m_enabled = !m_simulator->m_dyno.m_enabled;
+}
+
+void EngineSimApplication::toggleDynamometerHold() {
+    if (m_simulator != nullptr) m_simulator->m_dyno.m_hold = !m_simulator->m_dyno.m_hold;
+}
+
+void EngineSimApplication::changeGear(int direction) {
+    if (m_simulator == nullptr || m_simulator->getTransmission() == nullptr) return;
+    Transmission *transmission = m_simulator->getTransmission();
+    transmission->changeGear(transmission->getGear() + direction);
+}
+
+void EngineSimApplication::setTouchStarterHeld(bool held) { m_touchStarterHeld = held; }
+
+void EngineSimApplication::setTouchThrottle(double value, bool held) {
+    m_touchThrottle = clamp(value);
+    m_touchThrottleHeld = held;
 }
 void EngineSimApplication::createObjects(Engine *engine) {
     for (int i = 0; i < engine->getCylinderCount(); ++i) {
@@ -432,6 +465,11 @@ void EngineSimApplication::createObjects(Engine *engine) {
     }
 }
 void EngineSimApplication::destroyObjects() { for (auto *object : m_objects) { object->destroy(); delete object; } m_objects.clear(); }
+
+void EngineSimApplication::toggleFullscreen() {
+    if (m_platform != nullptr) m_platform->setFullscreen(!m_platform->isFullscreen());
+}
+
 void EngineSimApplication::refreshUserInterface() {
     m_uiManager.destroy();
     m_engineView = nullptr;
@@ -479,7 +517,10 @@ void EngineSimApplication::loadEngine(Engine *engine, Vehicle *vehicle, Transmis
     m_simulator = nullptr;
     if (engine == nullptr || vehicle == nullptr || transmission == nullptr) return;
 
-    m_simulator = engine->createSimulator(vehicle, transmission);
+    const int outputAudioSampleRate = m_audioOutput != nullptr
+        ? m_audioOutput->outputSampleRate()
+        : 44100;
+    m_simulator = engine->createSimulator(vehicle, transmission, outputAudioSampleRate);
     m_viewParameters.Layer1 = engine->getMaxDepth();
     engine->calculateDisplacement();
     // Preserve the script's simulation resolution. Reducing this to 2 kHz

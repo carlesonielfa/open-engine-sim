@@ -15,7 +15,6 @@ class SdlAudioOutput final : public AudioOutput {
 public:
     ~SdlAudioOutput() override { stop(); }
     bool start(Simulator *simulator) override;
-    void pump() override;
     bool loadImpulseResponse(Synthesizer &synthesizer, const std::string &path, float volume, int index) override;
     void stop() override;
 

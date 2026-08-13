@@ -16,3 +16,4 @@ compile_commands.json
 
 *.DS_Store
 error_log.log
+node_modules/

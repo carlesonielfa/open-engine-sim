@@ -24,6 +24,9 @@ class RightGaugeCluster : public UiElement {
 
         virtual void update(float dt);
         virtual void render();
+        virtual void onMouseDown(const Point &mouseLocal);
+        virtual void onMouseUp(const Point &mouseLocal);
+        virtual void onDrag(const Point &p0, const Point &mouse0, const Point &mouse);
 
         void setEngine(Engine *engine);
         void setUnits();
@@ -42,6 +45,9 @@ class RightGaugeCluster : public UiElement {
 
         void renderTachSpeedCluster(const Bounds &bounds);
         void renderFuelAirCluster(const Bounds &bounds);
+        Bounds throttleControlBounds() const;
+        void setTouchThrottleFromPoint(const Point &mouseLocal);
+        void renderTouchThrottleControl();
 
         LabeledGauge *m_tachometer;
         LabeledGauge *m_speedometer;
@@ -55,6 +61,7 @@ class RightGaugeCluster : public UiElement {
         std::string m_speedUnits;
         std::string m_pressureUnits;
         bool m_isAbsolute;
+        bool m_throttleHeld = false;
 };
 
 #endif /* ATG_ENGINE_SIM_GAUGE_CLUSTER_H */

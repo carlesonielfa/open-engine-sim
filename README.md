@@ -43,6 +43,12 @@ Settings before its first launch.
 
 RPM hold requires both `H` and the dyno (`D`).
 
+On touch or mouse-driven hosts, the dashboard keeps the same displays while
+adding direct controls: tap the Ignition, Dyno., or Hold row to toggle it; hold
+the Starter row while cranking; tap the up/down arrows in the Gear panel; and
+drag the slim slider beside the Throttle display. Releasing the slider returns
+the throttle to closed.
+
 ## Why this fork exists
 
 Open Engine Simulator is a community-driven, cross-platform fork of
@@ -108,6 +114,20 @@ make PLATFORM=macos-arm64 portable-test
 
 To reproduce CI's complete desktop, scripting, and SDL dummy-audio validation,
 use `make PLATFORM=<target> portable-validate`.
+
+### Browser build
+
+The browser host targets WebAssembly and WebGL 2. Install and activate the
+[Emscripten SDK](https://emscripten.org/docs/getting_started/downloads.html),
+then build and serve it locally:
+
+```sh
+make web
+make web-serve
+```
+
+Open <http://localhost:8080/>. Click **Enable audio** once the page loads;
+browsers require that interaction before they allow sound playback.
 
 On Apple Silicon with Homebrew, install the local prerequisites with:
 
