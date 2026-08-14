@@ -110,9 +110,12 @@ class EngineSimApplication {
         void changeGear(int direction);
         void setTouchStarterHeld(bool held);
         void setTouchThrottle(double value, bool held);
+        // Queued so a picker button cannot destroy the UI tree while its click
+        // event is still being dispatched.
+        void requestEngineScript(const std::string &relativeScriptPath);
 
     protected:
-        void loadScript();
+        bool loadScript(const std::string &relativeScriptPath);
         void processEngineInput(float dt);
         void renderScene();
 
@@ -147,6 +150,8 @@ class EngineSimApplication {
         AudioOutput *m_audioOutput;
 
         std::string m_assetPath;
+        std::string m_currentScriptPath = "main.mr";
+        std::string m_pendingScriptPath;
 
         GeometryGenerator m_geometryGenerator;
         AuthoredMeshLibrary m_authoredMeshes;

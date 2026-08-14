@@ -5,8 +5,10 @@
 #include "ui_button.h"
 
 #include "engine.h"
+#include "engine_catalog.h"
 
 #include <string>
+#include <vector>
 
 class InfoCluster : public UiElement {
 public:
@@ -29,15 +31,25 @@ public:
 protected:
     Engine *m_engine;
     UiButton *m_projectInfoButton;
+    UiButton *m_enginePickerButton;
     UiButton *m_fullscreenButton;
     UiButton *m_closeControlsButton;
     UiButton *m_githubButton;
     UiButton *m_issuesButton;
+    UiButton *m_closePickerButton;
+    UiButton *m_pickerScrollUpButton;
+    UiButton *m_pickerScrollDownButton;
+    std::vector<UiButton *> m_engineButtons;
     bool m_controlsVisible;
+    bool m_enginePickerVisible;
+    float m_pickerScrollOffset;
+    float m_pickerMaxScrollOffset;
 
     std::string m_logMessage;
 
     void setControlsVisible(bool visible);
+    void setEnginePickerVisible(bool visible);
+    void layoutEnginePicker(const Bounds &panel, bool updateVisibility);
 };
 
 #endif /* ATG_ENGINE_SIM_INFO_CLUSTER_H */

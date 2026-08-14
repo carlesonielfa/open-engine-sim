@@ -5,6 +5,7 @@ project(engine-sim VERSION 0.2.2 LANGUAGES CXX)
 include(CTest)
 include(FetchContent)
 include(cmake/EngineSimShaders.cmake)
+include(cmake/EngineSimEngineCatalog.cmake)
 
 option(ENGINE_SIM_BUILD_DESKTOP "Build the SDL3 desktop host" OFF)
 option(ENGINE_SIM_BUILD_WEB "Build the Emscripten/WebGL 2 browser host" OFF)
@@ -113,6 +114,7 @@ add_library(engine-sim-visualization STATIC
     src/cylinder_pressure_gauge.cpp
     src/cylinder_temperature_gauge.cpp
     src/desktop_application.cpp
+    src/engine_catalog.cpp
     src/engine_view.cpp
     src/firing_order_display.cpp
     src/fuel_cluster.cpp
@@ -136,7 +138,9 @@ add_library(engine-sim-visualization STATIC
     src/ui_utilities.cpp)
 target_include_directories(engine-sim-visualization
     PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>"
-    PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/third_party/stb")
+    PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/third_party/stb"
+        "${ENGINE_SIM_GENERATED_INCLUDE_DIRECTORY}")
 target_link_libraries(engine-sim-visualization PUBLIC engine-sim-render-support)
 target_compile_features(engine-sim-visualization PUBLIC cxx_std_17)
 

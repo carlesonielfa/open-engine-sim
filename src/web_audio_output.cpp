@@ -25,7 +25,26 @@ bool WebAudioOutput::start(Simulator *simulator) {
         m_error = "Audio was requested without a simulator";
         return false;
     }
-    return prepare();
+    if (!prepare()) return false;
+
+    // A hot engine reload replaces the simulator, so its old worklet node has
+    // already been removed by stop(). The browser permission was granted by
+    // the original user gesture; attach a fresh node to the already-running
+    // AudioContext instead of making the user enable sound again.
+    if (m_userEnabled) {
+        m_simulator->synthesizer().clearRealtimeInput();
+        m_callbackCount = 0;
+        m_lastPeakMilli = 0;
+        m_enabled = true;
+        m_state = AudioStateStarting;
+        if (m_workletThreadStarted) createProcessor();
+        else {
+            emscripten_start_wasm_audio_worklet_thread_async(
+                m_context, g_workletStack, sizeof(g_workletStack),
+                workletThreadInitialized, this);
+        }
+    }
+    return true;
 }
 
 bool WebAudioOutput::prepare() {
@@ -61,6 +80,7 @@ bool WebAudioOutput::enable() {
         m_error = "Audio was requested before the simulator initialized";
         return false;
     }
+    m_userEnabled = true;
     // Drop samples accumulated behind the user-gesture overlay before the
     // worklet begins consuming live simulation data.
     m_simulator->synthesizer().clearRealtimeInput();
@@ -97,9 +117,11 @@ void WebAudioOutput::stop() {
 
 void WebAudioOutput::shutdown() {
     stop();
+    m_userEnabled = false;
     if (m_context != 0) emscripten_destroy_audio_context(m_context);
     m_context = 0;
     m_workletThreadStarted = false;
+    m_processorCreated = false;
 }
 
 const char *WebAudioOutput::lastError() const {
@@ -124,6 +146,13 @@ void WebAudioOutput::workletThreadInitialized(
 }
 
 void WebAudioOutput::createProcessor() {
+    // A processor name can be registered only once in an AudioWorklet scope.
+    // Reloading an engine needs a new node using that existing processor, not
+    // another registration attempt (which leaves the async callback pending).
+    if (m_processorCreated) {
+        createNode();
+        return;
+    }
     WebAudioWorkletProcessorCreateOptions options = {};
     options.name = "open-engine-synth";
     emscripten_create_wasm_audio_worklet_processor_async(
@@ -138,6 +167,11 @@ void WebAudioOutput::processorCreated(
         if (output != nullptr) output->fail("The browser could not create the audio processor");
         return;
     }
+    output->m_processorCreated = true;
+    output->createNode();
+}
+
+void WebAudioOutput::createNode() {
     int channels[] = {1};
     EmscriptenAudioWorkletNodeCreateOptions options = {};
     options.numberOfInputs = 0;
@@ -146,14 +180,14 @@ void WebAudioOutput::processorCreated(
     options.channelCount = 1;
     options.channelCountMode = WEBAUDIO_CHANNEL_COUNT_MODE_EXPLICIT;
     options.channelInterpretation = WEBAUDIO_CHANNEL_INTERPRETATION_SPEAKERS;
-    output->m_node = emscripten_create_wasm_audio_worklet_node(
-        context, "open-engine-synth", &options, processAudio, output);
-    if (output->m_node == 0) {
-        output->fail("The browser could not create the audio node");
+    m_node = emscripten_create_wasm_audio_worklet_node(
+        m_context, "open-engine-synth", &options, processAudio, this);
+    if (m_node == 0) {
+        fail("The browser could not create the audio node");
         return;
     }
-    emscripten_audio_node_connect(output->m_node, context, 0, 0);
-    output->m_state = AudioStateReady;
+    emscripten_audio_node_connect(m_node, m_context, 0, 0);
+    m_state = AudioStateReady;
 }
 
 bool WebAudioOutput::processAudio(int, const AudioSampleFrame *, int outputCount,

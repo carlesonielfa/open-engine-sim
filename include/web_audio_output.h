@@ -45,16 +45,22 @@ private:
         int outputCount, AudioSampleFrame *outputs, int parameterCount,
         const AudioParamFrame *parameters, void *userData);
     void createProcessor();
+    void createNode();
     void fail(const char *message);
 
     EMSCRIPTEN_WEBAUDIO_T m_context = 0;
     EMSCRIPTEN_WEBAUDIO_T m_node = 0;
     Simulator *m_simulator = nullptr;
     std::atomic<bool> m_enabled{false};
+    // This records the user's initial browser gesture separately from the
+    // currently connected worklet node. Engine reloads intentionally destroy
+    // that node, then restore it for the replacement simulator.
+    bool m_userEnabled = false;
     std::string m_error;
     std::atomic<int> m_state{0};
     int m_sampleRate = 44100;
     bool m_workletThreadStarted = false;
+    bool m_processorCreated = false;
     std::atomic<std::uint64_t> m_callbackCount{0};
     std::atomic<int> m_lastPeakMilli{0};
 };

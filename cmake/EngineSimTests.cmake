@@ -24,20 +24,24 @@ add_executable(engine-sim-core-tests
     test/synthesizer_tests.cpp
     test/text_renderer_test.cpp
     test/authored_mesh_library_test.cpp
+    test/engine_catalog_test.cpp
     src/text_renderer.cpp
-    src/authored_mesh_library.cpp)
+    src/authored_mesh_library.cpp
+    src/engine_catalog.cpp)
 if(ENGINE_SIM_BUILD_SCRIPTING)
     target_sources(engine-sim-core-tests PRIVATE test/script_compile_test.cpp)
     target_link_libraries(engine-sim-core-tests PRIVATE engine-sim-scripting)
     target_compile_definitions(engine-sim-core-tests PRIVATE
-        ENGINE_SIM_TEST_ASSET_DIRECTORY="${CMAKE_CURRENT_SOURCE_DIR}/assets")
+        ENGINE_SIM_TEST_ASSET_DIRECTORY="${CMAKE_CURRENT_SOURCE_DIR}/assets"
+        ATG_ENGINE_SIM_PIRANHA_ENABLED)
 endif()
 target_link_libraries(engine-sim-core-tests
     PRIVATE engine-sim::core engine-sim-render-support csv-io gtest_main)
 target_include_directories(engine-sim-core-tests
     PRIVATE
         "${ENGINE_SIM_SUBMODULE_DIR}/csv-io/include"
-        "${CMAKE_CURRENT_SOURCE_DIR}/third_party/stb")
+        "${CMAKE_CURRENT_SOURCE_DIR}/third_party/stb"
+        "${ENGINE_SIM_GENERATED_INCLUDE_DIRECTORY}")
 target_compile_definitions(engine-sim-core-tests PRIVATE
     ENGINE_SIM_TEST_SOURCE_DIRECTORY="${CMAKE_CURRENT_SOURCE_DIR}")
 include(GoogleTest)

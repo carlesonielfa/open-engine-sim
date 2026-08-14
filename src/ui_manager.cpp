@@ -85,7 +85,9 @@ void UiManager::update(float dt) {
             m_dragStart->onMouseDown(m_dragStart->worldToLocal(mousePos));
         }
     }
-    else if (m_platform->wasMouseButtonReleased(DesktopMouseButton::Left)) {
+    // Browser event dispatch may deliver a quick press and release in one
+    // frame. Handle both transitions rather than discarding the release.
+    if (m_platform->wasMouseButtonReleased(DesktopMouseButton::Left)) {
         UiElement *dragRelease = m_hover;
 
         if (m_dragStart != nullptr) m_dragStart->onMouseUp(m_dragStart->worldToLocal(mousePos));
