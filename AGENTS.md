@@ -30,3 +30,7 @@
 - Keep one active modal unless a task explicitly requires a modal stack. Do not
   implement dialogs by changing a dashboard cluster's render layer, mouse
   bounds, or visibility state.
+- For dialog layout, centralize tunable spacing, dimensions, and column bounds
+  in one named metrics structure. Describe repeated rows as data and render
+  them through shared section/row primitives; do not scatter fractional bounds
+  or per-item coordinates through the render method.
