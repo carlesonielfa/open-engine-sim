@@ -171,13 +171,10 @@ void EngineSimApplication::process(float dt) {
 }
 
 void EngineSimApplication::render() {
-    const bool controlsVisible = m_infoCluster != nullptr && m_infoCluster->controlsVisible();
-    if (!controlsVisible) {
-        for (SimulationObject *object : m_objects) object->generateGeometry();
-        for (int sublayer = 0; sublayer < 3; ++sublayer) {
-            m_viewParameters.Sublayer = sublayer;
-            for (SimulationObject *object : m_objects) object->render(&m_viewParameters);
-        }
+    for (SimulationObject *object : m_objects) object->generateGeometry();
+    for (int sublayer = 0; sublayer < 3; ++sublayer) {
+        m_viewParameters.Sublayer = sublayer;
+        for (SimulationObject *object : m_objects) object->render(&m_viewParameters);
     }
     if (m_engineView != nullptr) m_uiManager.render();
 }
@@ -189,7 +186,6 @@ void EngineSimApplication::renderScene() {
         const Bounds windowBounds(static_cast<float>(m_screenWidth), static_cast<float>(m_screenHeight),
             { 0.0f, static_cast<float>(m_screenHeight) });
         if (m_screen == 0) {
-            const bool controlsVisible = m_infoCluster->controlsVisible();
             Grid dashboard = { 3, 2 };
             Grid dashboardThirds = { 3, 3 };
             Grid topStack = { 1, 3 };
@@ -202,12 +198,12 @@ void EngineSimApplication::renderScene() {
             const Bounds upperLeft = dashboardThirds.get(windowBounds, 0, 0);
             m_mixerCluster->m_bounds = topStack.get(upperLeft, 0, 2);
             m_infoCluster->m_bounds = topStack.get(upperLeft, 0, 0, 1, 2);
-            m_engineView->setVisible(!controlsVisible);
-            m_rightGaugeCluster->setVisible(!controlsVisible);
-            m_oscCluster->setVisible(!controlsVisible);
-            m_performanceCluster->setVisible(!controlsVisible);
-            m_loadSimulationCluster->setVisible(!controlsVisible);
-            m_mixerCluster->setVisible(!controlsVisible);
+            m_engineView->setVisible(true);
+            m_rightGaugeCluster->setVisible(true);
+            m_oscCluster->setVisible(true);
+            m_performanceCluster->setVisible(true);
+            m_loadSimulationCluster->setVisible(true);
+            m_mixerCluster->setVisible(true);
             m_infoCluster->setVisible(true);
         }
         else if (m_screen == 1) {
@@ -504,6 +500,10 @@ void EngineSimApplication::destroyObjects() { for (auto *object : m_objects) { o
 void EngineSimApplication::toggleFullscreen() {
     if (m_platform != nullptr) m_platform->setFullscreen(!m_platform->isFullscreen());
 }
+
+void EngineSimApplication::showControlsOverlay() { m_uiManager.showControlsOverlay(); }
+
+void EngineSimApplication::showEnginePickerOverlay() { m_uiManager.showEnginePickerOverlay(); }
 
 void EngineSimApplication::refreshUserInterface() {
     m_uiManager.destroy();

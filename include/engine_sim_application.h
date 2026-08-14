@@ -107,6 +107,8 @@ class EngineSimApplication {
         void toggleDynamometer();
         void toggleDynamometerHold();
         void toggleFullscreen();
+        void showControlsOverlay();
+        void showEnginePickerOverlay();
         void changeGear(int direction);
         void setTouchStarterHeld(bool held);
         void setTouchThrottle(double value, bool held);

@@ -20,3 +20,13 @@
 - Keep public wording accurate: this is an independent, community-driven fork
   of AngeTheGreat's Engine Simulator. Preserve upstream attribution and MIT
   notices.
+
+## UI overlays
+
+- Dashboard clusters own persistent panel content and trigger buttons only.
+  App-wide dialogs must use `UiManager`'s `OverlayHost`, which owns modal
+  lifecycle, z-order, viewport layout, backdrop rendering, and exclusive input
+  capture.
+- Keep one active modal unless a task explicitly requires a modal stack. Do not
+  implement dialogs by changing a dashboard cluster's render layer, mouse
+  bounds, or visibility state.

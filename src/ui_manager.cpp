@@ -15,10 +15,13 @@ void UiManager::initialize(EngineSimApplication *app, DesktopPlatform *platform)
     m_app = app;
     m_platform = platform;
     m_root.initialize(app);
+    m_overlayHost.initialize(app);
+    m_overlayHost.setRenderLayer(0x100);
 }
 
 void UiManager::destroy() {
     m_root.destroy();
+    m_overlayHost.destroy();
     m_hover = nullptr;
     m_dragStart = nullptr;
     m_touchDrags.clear();
@@ -26,8 +29,20 @@ void UiManager::destroy() {
     m_app = nullptr;
 }
 
+void UiManager::showControlsOverlay() { m_overlayHost.present(OverlayHost::Kind::Controls); }
+
+void UiManager::showEnginePickerOverlay() { m_overlayHost.present(OverlayHost::Kind::EnginePicker); }
+
+UiElement *UiManager::hitTest(const Point &position) {
+    if (m_overlayHost.isVisible()) {
+        if (UiElement *overlay = m_overlayHost.mouseOver(position)) return overlay;
+    }
+    return m_root.mouseOver(position);
+}
+
 void UiManager::update(float dt) {
     m_root.update(dt);
+    m_overlayHost.update(dt);
 
     const auto &touchEvents = m_platform->touchEvents();
     for (const DesktopTouchEvent &touch : touchEvents) {
@@ -35,7 +50,7 @@ void UiManager::update(float dt) {
         const auto existing = m_touchDrags.find(touch.fingerId);
 
         if (touch.type == DesktopTouchEvent::Type::Down) {
-            UiElement *element = m_root.mouseOver(position);
+            UiElement *element = hitTest(position);
             if (element == nullptr) continue;
 
             m_touchDrags[touch.fingerId] = {
@@ -53,7 +68,7 @@ void UiManager::update(float dt) {
             else {
                 drag.element->onMouseUp(drag.element->worldToLocal(position));
                 if (touch.type == DesktopTouchEvent::Type::Up &&
-                    m_root.mouseOver(position) == drag.element)
+                    hitTest(position) == drag.element)
                 {
                     drag.element->onMouseClick(drag.element->worldToLocal(position));
                 }
@@ -66,7 +81,7 @@ void UiManager::update(float dt) {
     m_platform->mousePosition(&mouse_x, &mouse_y);
 
     Point mousePos = { (float)mouse_x, (float)mouse_y };
-    UiElement *newHover = m_root.mouseOver(mousePos);
+    UiElement *newHover = hitTest(mousePos);
     if (newHover != m_hover) {
         if (m_hover != nullptr) m_hover->onMouseLeave();
         if (newHover != nullptr) newHover->onMouseOver(mousePos);
@@ -113,4 +128,5 @@ void UiManager::update(float dt) {
 
 void UiManager::render() {
     m_root.render();
+    m_overlayHost.render();
 }
