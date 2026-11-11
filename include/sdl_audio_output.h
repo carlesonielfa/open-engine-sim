@@ -1,6 +1,7 @@
 #ifndef ATG_ENGINE_SIM_SDL_AUDIO_OUTPUT_H
 #define ATG_ENGINE_SIM_SDL_AUDIO_OUTPUT_H
 
+#include "audio_declicker.h"
 #include "audio_output.h"
 
 #include <SDL3/SDL_audio.h>
@@ -35,11 +36,7 @@ private:
     int m_peakQueuedBytes = 0;
     std::atomic<std::uint64_t> m_underrunEvents = 0;
     std::atomic<std::uint64_t> m_clipEvents = 0;
-    std::uint64_t m_lastVisualDiagnosticTick = 0;
-    std::uint64_t m_lastCallbackTick = 0;
-    std::uint64_t m_worstCallbackGap = 0;
-    std::uint64_t m_worstFillTime = 0;
-    std::uint64_t m_worstPutTime = 0;
+    AudioDeclicker m_declicker;
     int m_sourceBytesPerFrame = static_cast<int>(sizeof(std::int16_t));
     int m_deviceFrequency = 0;
 };

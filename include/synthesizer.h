@@ -9,6 +9,7 @@
 #include "ring_buffer.h"
 #include "butterworth_low_pass_filter.h"
 #include "spsc_audio_ring.h"
+#include "audio_dsp_utils.h"
 
 #include <cinttypes>
 #if !defined(__EMSCRIPTEN__)
@@ -81,7 +82,6 @@ class Synthesizer {
         void destroy();
 
         int readAudioOutput(int samples, int16_t *buffer);
-        int consumeDspJumpPeak() { return m_dspJumpPeak.exchange(0, std::memory_order_acq_rel); }
 
         void writeInput(const double *data);
         void endInputBlock();
@@ -104,6 +104,9 @@ class Synthesizer {
         void setMaximumInputLatency(double seconds);
 
         int16_t renderAudio(int inputOffset, const AudioParameters &parameters);
+        // Clears every recursive filter. Called automatically if a non-finite
+        // sample ever reaches the output stage.
+        void resetDspState();
 
         double getLevelerGain();
         AudioParameters getAudioParameters();
@@ -124,10 +127,10 @@ class Synthesizer {
         RingBuffer<int16_t> m_audioBuffer;
         int m_audioBufferSize;
         int16_t *m_renderScratch = nullptr;
-        std::atomic<int> m_dspJumpPeak{0};
-        int16_t m_dspPreviousSample = 0;
-        bool m_dspHasPreviousSample = false;
 
+        // Number of times the DSP chain had to be reset because a non-finite
+        // value reached it. Exposed for diagnostics and tests.
+        std::atomic<int> m_dspResetCount{0};
 
         float m_inputSampleRate;
         float m_audioSampleRate;
@@ -142,7 +145,8 @@ class Synthesizer {
         std::atomic<bool> m_run;
         std::atomic<int> m_audioBufferedSamples;
         std::atomic<int> m_realtimeLatency{0};
-        std::atomic<uint32_t> m_audioNoiseState{0x6d2b79f5u};
+        // Only the rendering context touches this, so it needs no atomics.
+        uint32_t m_audioNoiseState = 0x6d2b79f5u;
         bool m_processed;
 
         // Input is produced on the simulation thread, rendered on a worker,

@@ -19,6 +19,8 @@ class LowPassFilter : public Filter {
             return m_y;
         }
 
+        inline void reset() { m_y = 0; }
+
         inline void setCutoffFrequency(float f) {
             m_rc = 1.0f / (f * 2.0f * static_cast<float>(constants::pi));
         }

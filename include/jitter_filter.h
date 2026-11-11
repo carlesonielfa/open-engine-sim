@@ -46,6 +46,12 @@ public:
         return v1 * s_frac + v0 * (1 - s_frac);
     }
 
+    inline void reset() {
+        for (int i = 0; i < m_maxJitter; ++i) m_history[i] = 0.0f;
+        m_offset = 0;
+        m_noiseFilter.reset();
+    }
+
     inline void setJitterScale(float jitterScale) { m_jitterScale = jitterScale; }
     inline float getJitterScale() const { return m_jitterScale; }
 

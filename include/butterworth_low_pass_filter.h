@@ -53,6 +53,16 @@ public:
         return y;
     }
 
+    // Clear the filter memory without touching the coefficients or allocating.
+    inline void reset() {
+        for (int i = 0; i < 4; ++i) {
+            m_y.removeBeginning(1);
+            m_y.write(0);
+            m_x.removeBeginning(1);
+            m_x.write(0);
+        }
+    }
+
     inline void setCutoffFrequency(T_Real f_c, T_Real sampleRate) {
         const T_Real f = std::tan(static_cast<T_Real>(constants::pi) * f_c / sampleRate);
         const T_Real f_2 = f * f;

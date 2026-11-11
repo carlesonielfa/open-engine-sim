@@ -16,6 +16,8 @@ if(NOT TARGET GTest::gtest_main)
 endif()
 
 add_executable(engine-sim-core-tests
+    test/audio_declicker_test.cpp
+    test/convolution_filter_test.cpp
     test/function_test.cpp
     test/gas_system_tests.cpp
     test/geometry_generator_test.cpp
