@@ -21,6 +21,7 @@
 #include "mixer_cluster.h"
 #include "info_cluster.h"
 #include "application_settings.h"
+#include "rpm_hold_controller.h"
 #include "desktop_platform.h"
 
 #include <string>
@@ -113,6 +114,12 @@ class EngineSimApplication {
         void changeGear(int direction);
         void setTouchStarterHeld(bool held);
         void setTouchThrottle(double value, bool held);
+        // Closed-loop speed hold: the application drives the throttle to keep
+        // the engine at a target rpm, so a finger need not balance it.
+        void toggleRpmHold();
+        void setRpmHoldTargetRpm(double rpm);
+        bool isRpmHoldEnabled() const { return m_rpmHold.enabled(); }
+        double getRpmHoldTargetRpm() const { return m_rpmHold.targetRpm(); }
         // Queued so a picker button cannot destroy the UI tree while its click
         // event is still being dispatched.
         void requestEngineScript(const std::string &relativeScriptPath);
@@ -130,6 +137,8 @@ class EngineSimApplication {
         double m_touchThrottle = 0.0;
         bool m_touchThrottleHeld = false;
         bool m_touchStarterHeld = false;
+        RpmHoldController m_rpmHold;
+        double m_rpmHoldStallSeconds = 0.0;
 
         double m_clutchPressure = 1.0;
         double m_targetClutchPressure = 1.0;

@@ -857,6 +857,24 @@ void EngineSimApplication::processEngineInput(float dt) {
     else if (m_platform->isKeyDown(DesktopKey::R)) m_targetSpeedSetting = 1.0;
     else if (fineControl && !consumedWheel) m_targetSpeedSetting = clamp(m_targetSpeedSetting + wheel * 0.0001);
     if (m_touchThrottleHeld) m_targetSpeedSetting = m_touchThrottle;
+    if (m_rpmHold.enabled()) {
+        const bool throttleKeyDown = m_platform->isKeyDown(DesktopKey::Q)
+            || m_platform->isKeyDown(DesktopKey::W)
+            || m_platform->isKeyDown(DesktopKey::E)
+            || m_platform->isKeyDown(DesktopKey::R);
+        const double rpm = m_iceEngine->getRpm();
+        // A stalled engine must not leave the throttle wide open waiting for
+        // a speed it can never reach.
+        m_rpmHoldStallSeconds = rpm < 120.0 ? m_rpmHoldStallSeconds + dt : 0.0;
+        if (throttleKeyDown || m_rpmHoldStallSeconds > 1.5) {
+            m_rpmHold.release();
+            m_rpmHoldStallSeconds = 0.0;
+            log("RPM hold off");
+        }
+        else {
+            m_targetSpeedSetting = m_rpmHold.update(dt, rpm);
+        }
+    }
     m_speedSetting = m_targetSpeedSetting * 0.5 + m_speedSetting * 0.5;
     m_iceEngine->setSpeedControl(m_speedSetting);
 
@@ -905,6 +923,29 @@ void EngineSimApplication::changeGear(int direction) {
     if (m_simulator == nullptr || m_simulator->getTransmission() == nullptr) return;
     Transmission *transmission = m_simulator->getTransmission();
     transmission->changeGear(transmission->getGear() + direction);
+}
+
+void EngineSimApplication::toggleRpmHold() {
+    if (m_iceEngine == nullptr || m_simulator == nullptr) return;
+    if (m_rpmHold.enabled()) {
+        m_rpmHold.release();
+        if (m_infoCluster != nullptr) m_infoCluster->setLogMessage("RPM hold off");
+        return;
+    }
+
+    // Hold whatever the engine is doing right now; the target is then
+    // adjusted by dragging. Round to the same 25 rpm steps the drag uses.
+    const double rpm = m_iceEngine->getRpm();
+    const double target = std::round(rpm / 25.0) * 25.0;
+    m_rpmHoldStallSeconds = 0.0;
+    m_rpmHold.engage(target, m_speedSetting, rpm);
+    if (m_infoCluster != nullptr) {
+        m_infoCluster->setLogMessage("RPM hold " + std::to_string(static_cast<int>(m_rpmHold.targetRpm())));
+    }
+}
+
+void EngineSimApplication::setRpmHoldTargetRpm(double rpm) {
+    if (m_rpmHold.enabled()) m_rpmHold.setTargetRpm(rpm);
 }
 
 void EngineSimApplication::setTouchStarterHeld(bool held) { m_touchStarterHeld = held; }
@@ -1058,6 +1099,8 @@ void EngineSimApplication::loadEngine(Engine *engine, Vehicle *vehicle, Transmis
     m_touchThrottle = 0.0;
     m_touchThrottleHeld = false;
     m_touchStarterHeld = false;
+    m_rpmHold.release();
+    m_rpmHoldStallSeconds = 0.0;
     m_clutchPressure = 0.0;
     m_targetClutchPressure = 0.0;
     m_dynoSpeed = 0.0;

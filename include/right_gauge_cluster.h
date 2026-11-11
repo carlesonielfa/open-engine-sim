@@ -46,7 +46,12 @@ class RightGaugeCluster : public UiElement {
         void renderTachSpeedCluster(const Bounds &bounds);
         void renderFuelAirCluster(const Bounds &bounds);
         Bounds throttleControlBounds() const;
+        // Hit area for the throttle bar: much wider and taller than the bar
+        // that is drawn, so a thumb does not have to land on a thin strip.
+        Bounds throttleTouchBounds() const;
+        Bounds rpmHoldButtonBounds() const;
         void setTouchThrottleFromPoint(const Point &mouseLocal);
+        void setRpmHoldTargetFromDrag(const Point &mouseLocal);
         void renderTouchThrottleControl();
 
         LabeledGauge *m_tachometer;
@@ -62,6 +67,13 @@ class RightGaugeCluster : public UiElement {
         std::string m_pressureUnits;
         bool m_isAbsolute;
         bool m_throttleHeld = false;
+
+        // While the rpm hold is on, dragging the throttle bar moves the target
+        // speed relative to where the drag started, at a fraction of the bar's
+        // sensitivity, instead of setting the throttle itself.
+        bool m_rpmDragging = false;
+        float m_rpmDragStartY = 0.0f;
+        double m_rpmDragStartTarget = 0.0;
 };
 
 #endif /* ATG_ENGINE_SIM_GAUGE_CLUSTER_H */
