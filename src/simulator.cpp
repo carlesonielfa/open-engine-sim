@@ -73,8 +73,8 @@ void Simulator::startFrame(double dt) {
     m_currentIteration = 0;
     m_synthesizer.setInputSampleRate(m_simulationFrequency * m_simulationSpeed);
 
-    const double timestep = getTimestep();
-    m_steps = (int)std::round((dt * m_simulationSpeed) / timestep);
+    m_steps = m_stepAccumulator.advance(
+        dt * m_simulationSpeed, static_cast<double>(m_simulationFrequency));
 
     if (m_synthesizerLatencyCorrectionEnabled) {
         const double targetLatency = getSynthesizerInputLatencyTarget();

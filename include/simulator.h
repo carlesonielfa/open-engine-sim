@@ -11,6 +11,7 @@
 #include "vehicle_drag_constraint.h"
 #include "delay_filter.h"
 #include "engine.h"
+#include "step_accumulator.h"
 
 #include <chrono>
 
@@ -125,6 +126,8 @@ private:
     double m_filteredEngineSpeed;
 
     int m_steps;
+
+    StepAccumulator m_stepAccumulator;
 };
 
 #endif /* ATG_ENGINE_SIM_SIMULATOR_H */
