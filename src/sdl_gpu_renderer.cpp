@@ -357,7 +357,9 @@ void SdlGpuRenderer::endFrame() {
         }
 
         const auto drawStage = [&](SDL_GPURenderPass *pass, std::uint32_t stage) {
-            std::vector<const Submission *> submissions;
+            // Reused every frame: this runs twice per frame over every draw.
+            static thread_local std::vector<const Submission *> submissions;
+            submissions.clear();
             for (const Submission &submission : m_submissions) {
                 if ((submission.stage & stage) != 0) submissions.push_back(&submission);
             }
@@ -397,11 +399,9 @@ void SdlGpuRenderer::endFrame() {
         depthTarget.stencil_store_op = SDL_GPU_STOREOP_DONT_CARE;
         SDL_GPUColorTargetInfo clearTarget = sceneColorTarget;
         clearTarget.texture = swapchainTexture;
-#ifdef __ANDROID__
-        // Loud diagnostic clear: if this reaches the display, presentation is
-        // healthy and the remaining bug is draw/blit/shader related.
-        clearTarget.clear_color = { 0.85f, 0.05f, 0.65f, 1.0f };
-#endif
+        // Anything the scene blit and the UI do not cover must show the normal
+        // background. A magenta debug clear used to be left here on Android and
+        // showed through at the edges of the screen.
         SDL_GPURenderPass *clearPass = SDL_BeginGPURenderPass(commands, &clearTarget, 1, nullptr);
         if (clearPass != nullptr) SDL_EndGPURenderPass(clearPass);
         SDL_GPURenderPass *scenePass = SDL_BeginGPURenderPass(commands, &sceneColorTarget, 1,

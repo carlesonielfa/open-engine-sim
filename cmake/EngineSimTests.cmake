@@ -22,6 +22,7 @@ add_executable(engine-sim-core-tests
     test/gas_system_tests.cpp
     test/geometry_generator_test.cpp
     test/rpm_hold_controller_test.cpp
+    test/latency_trim_test.cpp
     test/runtime_paths_test.cpp
     test/step_accumulator_test.cpp
     test/shaders_test.cpp

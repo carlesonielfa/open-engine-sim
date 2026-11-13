@@ -217,6 +217,10 @@ class EngineSimApplication {
         bool m_externalEnginePickerPending = false;
         float m_lastProcessMs = 0.0f;
         float m_lastRenderMs = 0.0f;
+        float m_averageRenderMs = 8.0f;
+        int m_rendersThisSecond = 0;
+        float m_processMsThisSecond = 0.0f;
+        float m_renderMsThisSecond = 0.0f;
         int m_postLoadProbeTicks = 0;
         int m_postLoadTickNumber = 0;
         bool m_postLoadFirstProcessDone = false;

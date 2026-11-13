@@ -336,6 +336,10 @@ void PistonEngineSimulator::endFrame() {
     }
 
     const double frameTimestep = simulationSteps() * getTimestep();
+    // A frame can legitimately run zero steps (very short frame at a low
+    // simulation frequency); dividing the accumulated flow by zero would put
+    // infinity into every intake.
+    if (!(frameTimestep > 0.0)) return;
     const int cylinderCount = m_engine->getCylinderCount();
     for (int i = 0; i < m_engine->getIntakeCount(); ++i) {
         m_engine->getIntake(i)->m_flowRate /= frameTimestep;

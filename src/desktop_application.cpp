@@ -17,6 +17,7 @@ extern volatile sig_atomic_t gCrashDetail;
 #endif
 
 #include <algorithm>
+#include <cmath>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
@@ -212,10 +213,12 @@ bool EngineSimApplication::tick() {
 #if defined(__EMSCRIPTEN__)
     constexpr std::uint64_t renderIntervalMs = 0;
 #elif defined(__ANDROID__)
-    // Keep presentation at 30 Hz on Android. The simulator/audio path keeps
-    // running between presentations, so spare CPU time goes to synthesis
-    // instead of producing 40-50 FPS bursts that can starve audio.
-    constexpr std::uint64_t renderIntervalMs = 33;
+    // Present at up to ~60 Hz, but never spend more than about half of the
+    // main thread on rendering: the interval follows the measured render time.
+    // Physics and audio are paced from wall time, and the audio-reserve guard
+    // below still postpones a presentation whenever the audio runs short.
+    const std::uint64_t renderIntervalMs = static_cast<std::uint64_t>(
+        std::clamp(2.0f * m_averageRenderMs, 16.0f, 50.0f));
 #else
     constexpr std::uint64_t renderIntervalMs = 50;
 #endif
@@ -283,6 +286,7 @@ bool EngineSimApplication::tick() {
 #endif
 #if defined(__ANDROID__)
         m_lastProcessMs = static_cast<float>(m_platform->ticks() - processStart);
+        m_processMsThisSecond += m_lastProcessMs;
 #endif
     }
 #if defined(__ANDROID__)
@@ -370,6 +374,9 @@ bool EngineSimApplication::tick() {
 #endif
 #if defined(__ANDROID__)
         m_lastRenderMs = static_cast<float>(m_platform->ticks() - renderStart);
+        m_averageRenderMs = 0.9f * m_averageRenderMs + 0.1f * m_lastRenderMs;
+        m_renderMsThisSecond += m_lastRenderMs;
+        ++m_rendersThisSecond;
 #endif
         m_lastRenderTick = now;
     }
@@ -390,12 +397,22 @@ bool EngineSimApplication::tick() {
         m_infoCluster->setLogMessage(m_mrDiagnosticMessage);
     }
     if (m_infoCluster != nullptr && now - m_lastPerfReportTick >= 1000 && !m_externalEnginePickerPending && m_pendingScriptPath.empty() && now >= m_mrDiagnosticUntilTick) {
+        const float elapsedMs = std::max(1.0f, static_cast<float>(now - m_lastPerfReportTick));
         m_lastPerfReportTick = now;
         const int simHz = m_simulator != nullptr
             ? static_cast<int>(m_simulator->getSimulationFrequency()) : 0;
+        const int reserveMs = m_simulator != nullptr
+            ? static_cast<int>(1000.0 * (m_simulator->getSynthesizerInputLatency()
+                + m_simulator->getSynthesizerOutputLatency())) : 0;
+        const int fps = static_cast<int>(std::lround(m_rendersThisSecond * 1000.0f / elapsedMs));
+        const int physicsPercent = static_cast<int>(100.0f * m_processMsThisSecond / elapsedMs);
+        const int renderPercent = static_cast<int>(100.0f * m_renderMsThisSecond / elapsedMs);
+        m_rendersThisSecond = 0;
+        m_processMsThisSecond = 0.0f;
+        m_renderMsThisSecond = 0.0f;
         m_infoCluster->setLogMessage(
-            "ANDROID PERF | SIM " + std::to_string(static_cast<int>(m_lastProcessMs)) +
-            "ms | RENDER " + std::to_string(static_cast<int>(m_lastRenderMs)) +
+            "ANDROID PERF | " + std::to_string(fps) + " fps | FISICA " + std::to_string(physicsPercent) +
+            "% | RENDER " + std::to_string(renderPercent) + "% | AUDIO " + std::to_string(reserveMs) +
             "ms | " + std::to_string(simHz) + "Hz");
     }
 #endif
@@ -1150,11 +1167,14 @@ void EngineSimApplication::loadEngine(Engine *engine, Vehicle *vehicle, Transmis
 #else
     m_simulator->setSimulationFrequency(engine->getSimulationFrequency());
 #endif
-    // SDL owns a stable output lead. Do not speed the simulation up/down to
-    // chase the input reservoir: that feedback loop audibly bends pitch at
-    // low RPM when a render frame varies in duration.
-    m_simulator->setTargetSynthesizerLatency(0.1);
-    m_simulator->setSynthesizerLatencyCorrectionEnabled(false);
+    // Hold the audio reserve (queued + ready to play) near 140 ms with a slow
+    // PI trim of at most +/-4% on how many physics steps run (latency_trim.h).
+    // It replaces the old bang-bang correction (+/-10% every frame), which
+    // bent the pitch at low rpm. The reserve must stay above the 80 ms that
+    // the presentation guard in tick() requires, or rendering is skipped, and
+    // below the 200 ms input cap, which discards audio and is heard as a buzz.
+    m_simulator->setTargetSynthesizerLatency(0.14);
+    m_simulator->setSynthesizerLatencyCorrectionEnabled(true);
     #if defined(__ANDROID__)
     // Preserve enough simulation history for the audio worker to recover from
     // short scheduler/render spikes instead of deleting useful input.
