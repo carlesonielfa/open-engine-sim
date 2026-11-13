@@ -15,6 +15,7 @@ public:
     };
 
     void initialize(EngineSimApplication *app) override;
+    void destroy() override;
     void update(float dt) override;
     void render() override;
     void signal(UiElement *element, Event event) override;
@@ -29,6 +30,7 @@ private:
     UiButton *m_closeButton = nullptr;
     UiButton *m_githubButton = nullptr;
     UiButton *m_issuesButton = nullptr;
+    UiButton *m_importEngineButton = nullptr;
     UiButton *m_pickerScrollUpButton = nullptr;
     UiButton *m_pickerScrollDownButton = nullptr;
     std::vector<UiButton *> m_engineButtons;

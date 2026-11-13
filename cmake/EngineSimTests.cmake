@@ -16,10 +16,15 @@ if(NOT TARGET GTest::gtest_main)
 endif()
 
 add_executable(engine-sim-core-tests
+    test/audio_declicker_test.cpp
+    test/convolution_filter_test.cpp
     test/function_test.cpp
     test/gas_system_tests.cpp
     test/geometry_generator_test.cpp
+    test/rpm_hold_controller_test.cpp
+    test/latency_trim_test.cpp
     test/runtime_paths_test.cpp
+    test/step_accumulator_test.cpp
     test/shaders_test.cpp
     test/synthesizer_tests.cpp
     test/text_renderer_test.cpp

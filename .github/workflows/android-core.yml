@@ -1,0 +1,199 @@
+name: Android APK Build
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - master
+
+jobs:
+  build-android:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Baixar projeto
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Preparar ferramentas
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            flex \
+            libfl-dev \
+            bison \
+            ninja-build \
+            curl \
+            unzip
+
+          flex --version
+          bison --version
+
+      - name: Instalar Android SDK, NDK e CMake
+        run: |
+          yes | "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" \
+            --licenses > /dev/null || true
+
+          "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" \
+            "platforms;android-35" \
+            "build-tools;35.0.0" \
+            "ndk;27.2.12479018" \
+            "cmake;3.31.6"
+
+      - name: Corrigir Piranha para Android
+        run: |
+          FILE="dependencies/submodules/piranha/include/standard_allocator.h"
+
+          echo "=== Android Piranha allocation compatibility patch ==="
+          echo "=== Antes ==="
+          grep -n "aligned_alloc" "$FILE" || true
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("dependencies/submodules/piranha/include/standard_allocator.h")
+          text = path.read_text()
+
+          old = "void *buffer = std::aligned_alloc(alignment, sizeof(t_alloc) * n);"
+
+          new = """void *buffer = nullptr;
+          #if defined(__ANDROID__)
+                          if (posix_memalign(&buffer, alignment, sizeof(t_alloc) * n) != 0) {
+                              buffer = nullptr;
+                          }
+          #else
+                          buffer = std::aligned_alloc(alignment, sizeof(t_alloc) * n);
+          #endif"""
+
+          if old not in text:
+              raise SystemExit(
+                  "ERRO: linha esperada com std::aligned_alloc nao encontrada."
+              )
+
+          path.write_text(text.replace(old, new, 1))
+          print("Patch Android aplicado.")
+          PY
+
+          echo "=== Depois ==="
+          grep -n -A8 -B3 "posix_memalign" "$FILE"
+
+      - name: Configurar Android ARM64 com Scripting
+        run: |
+          cmake \
+            -S . \
+            -B build-android \
+            -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE="$ANDROID_SDK_ROOT/ndk/27.2.12479018/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI=arm64-v8a \
+            -DANDROID_PLATFORM=android-26 \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DENGINE_SIM_BUILD_DESKTOP=OFF \
+            -DENGINE_SIM_BUILD_WEB=OFF \
+            -DENGINE_SIM_BUILD_SCRIPTING=ON \
+            -DBUILD_TESTING=OFF
+
+      - name: Compilar Core
+        run: |
+          cmake --build build-android \
+            --target engine-sim-core \
+            --parallel 2
+
+      - name: Compilar Render Support
+        run: |
+          cmake --build build-android \
+            --target engine-sim-render-support \
+            --parallel 2
+
+      - name: Compilar Visualization
+        run: |
+          cmake --build build-android \
+            --target engine-sim-visualization \
+            --parallel 2
+
+      - name: Compilar Scripting
+        run: |
+          cmake --build build-android \
+            --target engine-sim-scripting \
+            --parallel 2
+
+      - name: Preparar Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Preparar Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Baixar SDL3 Android
+        run: |
+          mkdir -p android/app/libs /tmp/sdl3-android
+          curl --fail --location --retry 3 \
+            "https://github.com/libsdl-org/SDL/releases/download/release-3.2.8/SDL3-devel-3.2.8-android.zip" \
+            --output /tmp/sdl3-android.zip
+          unzip -q /tmp/sdl3-android.zip -d /tmp/sdl3-android
+
+          SDL_AAR="$(find /tmp/sdl3-android -type f -name 'SDL3-3.2.8.aar' -print -quit)"
+          if [ -z "$SDL_AAR" ]; then
+            echo "SDL3-3.2.8.aar nao encontrado no pacote Android."
+            find /tmp/sdl3-android -maxdepth 4 -type f | sort
+            exit 1
+          fi
+
+          cp "$SDL_AAR" android/app/libs/SDL3-3.2.8.aar
+          ls -lh android/app/libs/SDL3-3.2.8.aar
+
+      - name: Montar APK debug ARM64
+        run: |
+          gradle -p android :app:assembleDebug --stacktrace
+
+      - name: Verificar APK
+        run: |
+          APK="android/app/build/outputs/apk/debug/app-debug.apk"
+          test -f "$APK"
+          ls -lh "$APK"
+
+      - name: Coletar simbolos nativos de debug
+        run: |
+          mkdir -p android-native-debug
+          LIBMAIN="$(find android/app/.cxx android/app/build -type f -path '*arm64-v8a*' -name 'libmain.so' -print 2>/dev/null | head -n 1)"
+          if [ -z "$LIBMAIN" ]; then
+            echo "libmain.so nao encontrado para simbolizacao"
+            find android/app/.cxx android/app/build -type f -name '*.so' -print 2>/dev/null || true
+            exit 1
+          fi
+          cp "$LIBMAIN" android-native-debug/libmain.so
+          LLVM_NM="$ANDROID_SDK_ROOT/ndk/27.2.12479018/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm"
+          LLVM_READELF="$ANDROID_SDK_ROOT/ndk/27.2.12479018/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf"
+          "$LLVM_NM" -n -C android-native-debug/libmain.so > android-native-debug/libmain-symbols.txt
+          "$LLVM_READELF" -n android-native-debug/libmain.so > android-native-debug/build-id.txt
+          file android-native-debug/libmain.so
+          ls -lh android-native-debug/
+
+      - name: Publicar simbolos nativos
+        uses: actions/upload-artifact@v4
+        with:
+          name: open-engine-sim-android-arm64-native-symbols
+          path: android-native-debug/
+          if-no-files-found: error
+
+      - name: Publicar APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: open-engine-sim-android-arm64-debug
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+
+      - name: Resultado
+        run: |
+          echo "========================================"
+          echo "ANDROID ARM64"
+          echo "Core           = OK"
+          echo "Render Support = OK"
+          echo "Visualization  = OK"
+          echo "Scripting      = OK"
+          echo "APK            = OK"
+          echo "========================================"

@@ -1,5 +1,7 @@
 #include "../include/simulator.h"
 
+#include "../include/latency_trim.h"
+
 Simulator::Simulator() {
     m_engine = nullptr;
     m_vehicle = nullptr;
@@ -51,6 +53,8 @@ void Simulator::initialize(const Parameters &params) {
 }
 
 void Simulator::loadSimulation(Engine *engine, Vehicle *vehicle, Transmission *transmission) {
+    m_stepAccumulator.reset();
+    m_latencyTrim.reset();
     m_engine = engine;
     m_vehicle = vehicle;
     m_transmission = transmission;
@@ -73,21 +77,15 @@ void Simulator::startFrame(double dt) {
     m_currentIteration = 0;
     m_synthesizer.setInputSampleRate(m_simulationFrequency * m_simulationSpeed);
 
-    const double timestep = getTimestep();
-    m_steps = (int)std::round((dt * m_simulationSpeed) / timestep);
-
+    // Pace physics to wall time exactly, then nudge it by a few percent at most
+    // to hold the audio reserve at its target (see latency_trim.h).
+    double trim = 1.0;
     if (m_synthesizerLatencyCorrectionEnabled) {
-        const double targetLatency = getSynthesizerInputLatencyTarget();
-        if (m_synthesizer.getLatency() < targetLatency) {
-            m_steps = static_cast<int>((m_steps + 1) * 1.1);
-        }
-        else if (m_synthesizer.getLatency() > targetLatency) {
-            m_steps = static_cast<int>((m_steps - 1) * 0.9);
-            if (m_steps < 0) {
-                m_steps = 0;
-            }
-        }
+        const double reserve = m_synthesizer.getLatency() + m_synthesizer.getAudioOutputLatency();
+        trim = m_latencyTrim.update(reserve, getSynthesizerInputLatencyTarget(), dt);
     }
+    m_steps = m_stepAccumulator.advance(
+        dt * m_simulationSpeed * trim, static_cast<double>(m_simulationFrequency));
 
     if (m_steps > 0) {
         for (int i = 0; i < m_engine->getIntakeCount(); ++i) {

@@ -1,0 +1,84 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'org.openenginesim.app'
+    compileSdk 35
+    ndkVersion '27.2.12479018'
+
+    defaultConfig {
+        applicationId 'org.openenginesim.app'
+        minSdk 26
+        targetSdk 35
+        versionCode 52
+        versionName '0.2.2-android-alpha55-audio-clean-rebuild'
+
+        ndk {
+            abiFilters 'arm64-v8a'
+        }
+
+        externalNativeBuild {
+            cmake {
+                arguments '-DANDROID_STL=c++_shared',
+                    '-DBUILD_TESTING=OFF',
+                    '-DENGINE_SIM_BUILD_ANDROID=ON',
+                    '-DENGINE_SIM_BUILD_DESKTOP=OFF',
+                    '-DENGINE_SIM_BUILD_WEB=OFF',
+                    '-DENGINE_SIM_BUILD_SCRIPTING=ON',
+                    '-DENGINE_SIM_FETCH_SDL3=OFF'
+            }
+        }
+    }
+
+    buildFeatures {
+        prefab true
+    }
+
+    packaging {
+        jniLibs {
+            // Keep the native symbol table in this diagnostic APK. The CI also
+            // archives the unstripped libmain.so separately for llvm-addr2line.
+            keepDebugSymbols += ['**/libmain.so']
+        }
+    }
+
+    sourceSets {
+        main {
+            // Package the existing simulator assets at the APK asset root.
+            assets.srcDirs = ['../../assets']
+        }
+    }
+
+    externalNativeBuild {
+        cmake {
+            path file('../../CMakeLists.txt')
+            version '3.31.6'
+        }
+    }
+
+    buildTypes {
+        debug {
+            minifyEnabled false
+            // This APK is installed as a debug package, but the simulator itself
+            // is a CPU-heavy native workload. Android's normal Debug CMake flags
+            // (-O0) make the physics/synthesis path several times slower.
+            externalNativeBuild {
+                cmake {
+                    arguments '-DCMAKE_BUILD_TYPE=Release',
+                        '-DCMAKE_C_FLAGS_DEBUG=-O3 -DNDEBUG',
+                        '-DCMAKE_CXX_FLAGS_DEBUG=-O3 -DNDEBUG',
+                        '-DCMAKE_C_FLAGS_RELEASE=-O3 -DNDEBUG -g -fno-omit-frame-pointer',
+                        '-DCMAKE_CXX_FLAGS_RELEASE=-O3 -DNDEBUG -g -fno-omit-frame-pointer'
+                }
+            }
+        }
+        release {
+            minifyEnabled false
+        }
+    }
+}
+
+dependencies {
+    implementation files('libs/SDL3-3.2.8.aar')
+}

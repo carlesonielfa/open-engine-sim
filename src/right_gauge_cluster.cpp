@@ -178,7 +178,18 @@ void RightGaugeCluster::update(float dt) {
 
 void RightGaugeCluster::onMouseDown(const Point &mouseLocal) {
     UiElement::onMouseDown(mouseLocal);
-    if (throttleControlBounds().overlaps(mouseLocal)) {
+    if (rpmHoldButtonBounds().overlaps(mouseLocal)) {
+        m_app->toggleRpmHold();
+        return;
+    }
+    if (!throttleTouchBounds().overlaps(mouseLocal)) return;
+
+    if (m_app->isRpmHoldEnabled()) {
+        m_rpmDragging = true;
+        m_rpmDragStartY = mouseLocal.y;
+        m_rpmDragStartTarget = m_app->getRpmHoldTargetRpm();
+    }
+    else {
         m_throttleHeld = true;
         setTouchThrottleFromPoint(mouseLocal);
     }
@@ -186,6 +197,7 @@ void RightGaugeCluster::onMouseDown(const Point &mouseLocal) {
 
 void RightGaugeCluster::onMouseUp(const Point &mouseLocal) {
     UiElement::onMouseUp(mouseLocal);
+    m_rpmDragging = false;
     if (m_throttleHeld) {
         m_throttleHeld = false;
         m_app->setTouchThrottle(0.0, false);
@@ -193,10 +205,22 @@ void RightGaugeCluster::onMouseUp(const Point &mouseLocal) {
 }
 
 void RightGaugeCluster::onDrag(const Point &, const Point &, const Point &mouse) {
-    if (m_throttleHeld) setTouchThrottleFromPoint(mouse);
+    if (m_rpmDragging) setRpmHoldTargetFromDrag(mouse);
+    else if (m_throttleHeld) setTouchThrottleFromPoint(mouse);
 }
 
 void RightGaugeCluster::render() {
+    // Hotload rebuilds the UI and may render it before the next update().
+    // Propagate dependencies here as well so child widgets are valid on their
+    // very first frame.
+    if (m_fuelCluster != nullptr) {
+        m_fuelCluster->m_engine = m_engine;
+        m_fuelCluster->m_simulator = m_simulator;
+    }
+    if (m_combusionChamberStatus != nullptr) m_combusionChamberStatus->m_engine = m_engine;
+    if (m_throttleDisplay != nullptr) m_throttleDisplay->m_engine = m_engine;
+    if (m_afrCluster != nullptr) m_afrCluster->m_engine = m_engine;
+
     drawFrame(m_bounds, 1.0, m_app->getForegroundColor(), m_app->getBackgroundColor());
 
     const Bounds tachSpeedCluster = m_bounds.verticalSplit(0.5f, 1.0f);
@@ -309,6 +333,38 @@ Bounds RightGaugeCluster::throttleControlBounds() const {
     return throttle.horizontalSplit(0.84f, 0.96f).verticalSplit(0.12f, 0.82f);
 }
 
+Bounds RightGaugeCluster::throttleTouchBounds() const {
+    const Bounds fuelAir = m_bounds.verticalSplit(0.0f, 0.5f);
+    const Bounds left = fuelAir.horizontalSplit(0.0f, 0.5f);
+    const Bounds throttle = left.verticalSplit(0.5f, 1.0f);
+    // The right 45% of the throttle area, above the hold button.
+    return throttle.horizontalSplit(0.55f, 1.0f).verticalSplit(0.30f, 1.0f);
+}
+
+Bounds RightGaugeCluster::rpmHoldButtonBounds() const {
+    const Bounds fuelAir = m_bounds.verticalSplit(0.0f, 0.5f);
+    const Bounds left = fuelAir.horizontalSplit(0.0f, 0.5f);
+    const Bounds throttle = left.verticalSplit(0.5f, 1.0f);
+    return throttle.horizontalSplit(0.55f, 1.0f).verticalSplit(0.0f, 0.26f).inset(2.0f);
+}
+
+void RightGaugeCluster::setRpmHoldTargetFromDrag(const Point &mouseLocal) {
+    // Moving the thumb by 2.5 bar heights sweeps the whole rpm range, so the
+    // target moves slowly enough to land on a number, and it is relative to
+    // where the drag began, so touching the bar never makes it jump.
+    const Bounds bar = throttleControlBounds();
+    const double redlineRpm = (m_engine != nullptr)
+        ? units::toRpm(m_engine->getRedline())
+        : 6000.0;
+    const double range = std::max(3000.0, redlineRpm);
+    const double travel = static_cast<double>(bar.height()) * 2.5;
+    const double delta = (travel > 1.0)
+        ? (mouseLocal.y - m_rpmDragStartY) / travel * range
+        : 0.0;
+    const double target = m_rpmDragStartTarget + delta;
+    m_app->setRpmHoldTargetRpm(std::round(target / 25.0) * 25.0);
+}
+
 void RightGaugeCluster::setTouchThrottleFromPoint(const Point &mouseLocal) {
     const Bounds control = throttleControlBounds();
     const float value = clamp((mouseLocal.y - control.bottom()) / control.height());
@@ -324,6 +380,19 @@ void RightGaugeCluster::renderTouchThrottleControl() {
 
     drawFrame(control, 1.0f, m_app->getForegroundColor(), m_app->getBackgroundColor());
     if (value > 0.0f) drawBox(fill, m_app->getRed());
+
+    // RPM hold button: shows the target speed while the hold is on.
+    const bool holding = m_app->isRpmHoldEnabled();
+    const ysVector foreground = m_app->getForegroundColor();
+    const ysVector background = m_app->getBackgroundColor();
+    const Bounds button = rpmHoldButtonBounds();
+    drawFrame(button, 1.0f, foreground, holding ? foreground : background);
+    m_app->getTextRenderer()->SetColor(holding ? background : foreground);
+    const std::string label = holding
+        ? "HOLD " + std::to_string(static_cast<int>(m_app->getRpmHoldTargetRpm()))
+        : "HOLD";
+    drawCenteredText(label, button, 14.0f, Bounds::center);
+    m_app->getTextRenderer()->SetColor(foreground);
 }
 
 double RightGaugeCluster::getManifoldPressureWithUnits(double ambientPressure) {
@@ -360,9 +429,9 @@ double RightGaugeCluster::getRedline() const {
 }
 
 double RightGaugeCluster::getSpeed() const {
-    return (m_simulator->getVehicle() != nullptr)
-        ? m_simulator->getVehicle()->getSpeed()
-        : 0;
+    if (m_simulator == nullptr) return 0.0;
+    Vehicle *vehicle = m_simulator->getVehicle();
+    return (vehicle != nullptr) ? vehicle->getSpeed() : 0.0;
 }
 
 double RightGaugeCluster::getManifoldPressure() const {

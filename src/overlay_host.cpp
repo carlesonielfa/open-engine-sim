@@ -74,6 +74,19 @@ private:
 }
 
 void OverlayHost::initialize(EngineSimApplication *app) {
+    // This object is owned by UiManager and is reused across engine hotloads.
+    // Never carry non-owning child pointers from a previous UI generation.
+    m_closeButton = nullptr;
+    m_githubButton = nullptr;
+    m_issuesButton = nullptr;
+    m_importEngineButton = nullptr;
+    m_pickerScrollUpButton = nullptr;
+    m_pickerScrollDownButton = nullptr;
+    m_engineButtons.clear();
+    m_kind = Kind::None;
+    m_pickerScrollOffset = 0.0f;
+    m_pickerMaxScrollOffset = 0.0f;
+
     UiElement::initialize(app);
     m_closeButton = addElement<UiButton>(this);
     m_closeButton->m_text = "CLOSE";
@@ -93,6 +106,11 @@ void OverlayHost::initialize(EngineSimApplication *app) {
     m_issuesButton->m_inverted = true;
     m_issuesButton->m_drawFrame = false;
 
+    m_importEngineButton = addElement<UiButton>(this);
+    m_importEngineButton->m_text = "IMPORT .MR";
+    m_importEngineButton->m_fontSize = 14.0f;
+    m_importEngineButton->m_inverted = true;
+
     m_pickerScrollUpButton = addElement<UiButton>(this);
     m_pickerScrollUpButton->m_text = "UP";
     m_pickerScrollUpButton->m_fontSize = 14.0f;
@@ -111,6 +129,22 @@ void OverlayHost::initialize(EngineSimApplication *app) {
         m_engineButtons.push_back(button);
     }
     dismiss();
+}
+
+void OverlayHost::destroy() {
+    // UiElement::destroy() deletes the owned children. Clear every cached raw
+    // pointer afterwards so a later initialize() cannot dereference freed UI.
+    UiElement::destroy();
+    m_closeButton = nullptr;
+    m_githubButton = nullptr;
+    m_issuesButton = nullptr;
+    m_importEngineButton = nullptr;
+    m_pickerScrollUpButton = nullptr;
+    m_pickerScrollDownButton = nullptr;
+    m_engineButtons.clear();
+    m_kind = Kind::None;
+    m_pickerScrollOffset = 0.0f;
+    m_pickerMaxScrollOffset = 0.0f;
 }
 
 Bounds OverlayHost::viewportBounds() const {
@@ -149,6 +183,7 @@ void OverlayHost::setChildrenVisible() {
     if (m_closeButton != nullptr) m_closeButton->setVisible(controls || picker);
     if (m_githubButton != nullptr) m_githubButton->setVisible(controls);
     if (m_issuesButton != nullptr) m_issuesButton->setVisible(controls);
+    if (m_importEngineButton != nullptr) m_importEngineButton->setVisible(picker);
     if (m_pickerScrollUpButton != nullptr) m_pickerScrollUpButton->setVisible(picker);
     if (m_pickerScrollDownButton != nullptr) m_pickerScrollDownButton->setVisible(picker);
     for (UiButton *button : m_engineButtons) button->setVisible(picker);
@@ -207,6 +242,7 @@ void OverlayHost::layoutEnginePicker(const Bounds &panel) {
     m_pickerMaxScrollOffset = std::max(0.0f, contentHeight - listBounds.height());
     m_pickerScrollOffset = std::min(m_pickerScrollOffset, m_pickerMaxScrollOffset);
     m_closeButton->m_bounds = content.verticalSplit(0.88f, 0.98f).horizontalSplit(0.78f, 1.0f);
+    m_importEngineButton->m_bounds = content.verticalSplit(0.88f, 0.98f).horizontalSplit(0.00f, 0.30f);
     m_pickerScrollUpButton->m_bounds = content.verticalSplit(0.88f, 0.98f).horizontalSplit(0.50f, 0.63f);
     m_pickerScrollDownButton->m_bounds = content.verticalSplit(0.88f, 0.98f).horizontalSplit(0.64f, 0.77f);
 
@@ -235,6 +271,10 @@ void OverlayHost::layoutEnginePicker(const Bounds &panel) {
 void OverlayHost::signal(UiElement *element, Event event) {
     if (event != Event::Clicked) return;
     if (element == m_closeButton) dismiss();
+    else if (element == m_importEngineButton) {
+        m_app->requestExternalEnginePicker();
+        dismiss();
+    }
     else if (element == m_githubButton) m_app->getPlatform()->openUrl("https://github.com/carlesonielfa/open-engine-sim");
     else if (element == m_issuesButton) m_app->getPlatform()->openUrl("https://github.com/carlesonielfa/open-engine-sim/issues");
     else if (element == m_pickerScrollUpButton) m_pickerScrollOffset = std::max(0.0f, m_pickerScrollOffset - 180.0f);
@@ -278,7 +318,7 @@ void OverlayHost::render() {
         const int columns = listBounds.width() >= 700.0f ? 3 : 2;
         drawAlignedText("SELECT ENGINE", content.verticalSplit(0.90f, 0.98f), 28.0f, Bounds::lm, Bounds::lm);
         m_app->getTextRenderer()->SetColor(secondary);
-        drawAlignedText("PACKAGED ENGINES", content.verticalSplit(0.02f, 0.09f), 16.0f, Bounds::lm, Bounds::lm);
+        drawAlignedText("PACKAGED ENGINES  |  IMPORT .MR LOADS A FILE FROM YOUR PHONE", content.verticalSplit(0.02f, 0.09f), 16.0f, Bounds::lm, Bounds::lm);
         m_app->getTextRenderer()->SetColor(foreground);
 
         float y = listBounds.top() - m_pickerScrollOffset;

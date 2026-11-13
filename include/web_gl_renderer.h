@@ -53,6 +53,9 @@ private:
     unsigned int m_program = 0;
     unsigned int m_vertexBuffer = 0;
     unsigned int m_indexBuffer = 0;
+    unsigned int m_vertexArray = 0;
+    std::size_t m_vertexCapacityBytes = 0;
+    std::size_t m_indexCapacityBytes = 0;
     int m_transformLocation = -1;
     int m_cameraLocation = -1;
     int m_projectionLocation = -1;

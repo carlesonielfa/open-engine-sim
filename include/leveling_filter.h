@@ -12,6 +12,7 @@ class LevelingFilter : public Filter {
 
         virtual float f(float sample);
         float getAttenuation() const { return m_attenuation; }
+        void reset() { m_peak = p_target; m_attenuation = 1.0f; }
 
     protected:
         float m_peak;

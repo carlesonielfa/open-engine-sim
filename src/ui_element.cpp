@@ -34,6 +34,14 @@ void UiElement::destroy() {
     }
 
     m_children.clear();
+
+    // destroy() is also used as a reset before reinitialization. Interaction
+    // state must not survive the child tree it referred to.
+    m_mouseOver = false;
+    m_mouseHeld = false;
+    m_parent = nullptr;
+    m_signalTarget = nullptr;
+    m_index = -1;
 }
 
 void UiElement::update(float dt) {

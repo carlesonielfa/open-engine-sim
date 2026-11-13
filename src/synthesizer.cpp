@@ -4,21 +4,40 @@
 
 #include <algorithm>
 #include <cassert>
+#include <chrono>
 #include <cmath>
+#include <cstring>
 
 namespace {
-float audioRandom(std::atomic<uint32_t> &state) {
-    uint32_t value = state.load(std::memory_order_relaxed);
-    uint32_t next;
-    do {
-        next = value;
-        next ^= next << 13;
-        next ^= next >> 17;
-        next ^= next << 5;
-    } while (!state.compare_exchange_weak(value, next,
-        std::memory_order_relaxed, std::memory_order_relaxed));
+float audioRandom(uint32_t &state) {
+    // xorshift32. The state is only ever touched by the rendering context.
+    uint32_t next = state;
+    next ^= next << 13;
+    next ^= next >> 17;
+    next ^= next << 5;
+    state = next;
     return static_cast<float>(next) / static_cast<float>(UINT32_MAX) * 2.0f - 1.0f;
 }
+
+// Inputs are exhaust pressures in arbitrary units. Anything beyond this is a
+// simulation fault, not sound.
+constexpr double MaximumInputMagnitude = 1.0e8;
+
+#if !defined(__EMSCRIPTEN__)
+// How long the rendering worker sleeps before re-checking for work. Wakeups
+// from the device thread are not issued under the input mutex, so a short
+// timeout bounds the cost of a missed notification.
+constexpr std::chrono::milliseconds RenderWakeInterval(4);
+#endif
+
+#if defined(__ANDROID__)
+// Rendered-but-unplayed PCM kept ready for the device callback. It has to
+// cover the longest stall of the simulation thread (a slow frame) but every
+// sample of it is control latency, so keep it as small as that allows.
+constexpr int OutputLeadSamples = 8192;
+#else
+constexpr int OutputLeadSamples = 1024;
+#endif
 }
 
 Synthesizer::Synthesizer() {
@@ -29,6 +48,7 @@ Synthesizer::Synthesizer() {
     m_inputSamplesRead = 0;
 
     m_audioBufferSize = 0;
+    m_renderScratch = nullptr;
 
     m_inputSampleRate = 0.0;
     m_audioSampleRate = 0.0;
@@ -78,6 +98,7 @@ void Synthesizer::initialize(const Parameters &p) {
     m_audioBufferedSamples = 0;
 
     m_audioBuffer.initialize(p.audioBufferSize);
+    m_renderScratch = new int16_t[p.audioBufferSize];
     m_inputChannels = new InputChannel[p.inputChannelCount];
     for (int i = 0; i < p.inputChannelCount; ++i) {
         m_inputChannels[i].transferBuffer = new float[p.inputBufferSize];
@@ -132,6 +153,8 @@ void Synthesizer::initializeImpulseResponse(
         m_filters[index].convolution.getImpulseResponse()[i] =
             volume * impulseResponse[i] / INT16_MAX;
     }
+    // Build the frequency-domain partitions now, not on the audio thread.
+    m_filters[index].convolution.prepare();
 }
 
 void Synthesizer::startAudioRenderingThread() {
@@ -165,8 +188,8 @@ bool Synthesizer::pumpAudioRendering() {
         return false;
     }
 
-    constexpr int outputLeadSamples = 1024;
-    const int targetOutputSamples = std::min(outputLeadSamples, m_audioBufferSize - 1);
+    audio_dsp::enableFlushToZero();
+    const int targetOutputSamples = std::min(OutputLeadSamples, m_audioBufferSize - 1);
     const int n = std::min(
         std::max(0, targetOutputSamples - m_audioBufferedSamples.load()),
         static_cast<int>(m_inputChannels[0].data.size()));
@@ -185,6 +208,16 @@ bool Synthesizer::pumpAudioRendering() {
         parameters = m_audioParameters;
     }
     std::lock_guard<std::mutex> renderLock(m_renderLock);
+    // These parameters are constant for the whole rendered block. Updating the
+    // leveler once here avoids three stores for every 44.1 kHz output sample.
+#if defined(__ANDROID__)
+    const float safeVolume = std::max(1.0f, std::abs(parameters.volume));
+    m_levelingFilter.p_target = std::min(parameters.levelerTarget, 22000.0f / safeVolume);
+#else
+    m_levelingFilter.p_target = parameters.levelerTarget;
+#endif
+    m_levelingFilter.p_maxLevel = parameters.levelerMaxGain;
+    m_levelingFilter.p_minLevel = parameters.levelerMinGain;
     for (int i = 0; i < m_inputChannelCount; ++i) {
         m_filters[i].airNoiseLowPass.setCutoffFrequency(
             static_cast<float>(parameters.airNoiseFrequencyCutoff), m_audioSampleRate);
@@ -210,6 +243,8 @@ void Synthesizer::discardAudioOutput() {
 
 void Synthesizer::destroy() {
     m_audioBuffer.destroy();
+    delete[] m_renderScratch;
+    m_renderScratch = nullptr;
 
     for (int i = 0; i < m_inputChannelCount; ++i) {
         m_inputChannels[i].data.destroy();
@@ -270,6 +305,7 @@ void Synthesizer::writeInput(const double *data) {
     for (int i = 0; i < m_inputChannelCount; ++i) {
         RingBuffer<float> &buffer = m_inputChannels[i].data;
         const double lastInputSample = m_inputChannels[i].lastInputSample;
+        const double input = audio_dsp::sanitizeSample(data[i], MaximumInputMagnitude);
         const size_t baseIndex = buffer.writeIndex();
         const double distance =
             inputDistance(m_inputWriteOffset, m_lastInputSampleOffset);
@@ -279,7 +315,7 @@ void Synthesizer::writeInput(const double *data) {
             if (s >= m_inputBufferSize) s -= m_inputBufferSize;
 
             const double f = s / distance;
-            const double sample = lastInputSample * (1 - f) + data[i] * f;
+            const double sample = lastInputSample * (1 - f) + input * f;
 
             const float filteredSample =
                 m_filters[i].antialiasing.fast_f(static_cast<float>(sample));
@@ -292,7 +328,7 @@ void Synthesizer::writeInput(const double *data) {
 #endif
         }
 
-        m_inputChannels[i].lastInputSample = data[i];
+        m_inputChannels[i].lastInputSample = input;
     }
 
     m_lastInputSampleOffset = m_inputWriteOffset;
@@ -330,6 +366,7 @@ void Synthesizer::endInputBlock() {
 
 void Synthesizer::audioRenderingThread() {
 #if !defined(__EMSCRIPTEN__)
+    audio_dsp::enableFlushToZero();
     while (m_run) {
         renderAudio();
     }
@@ -341,15 +378,19 @@ void Synthesizer::renderAudio() {
     std::unique_lock<std::mutex> inputLock(m_inputLock);
     // A second, modest reservoir decouples the render worker from the device
     // queue without adding a perceptible control-to-sound delay.
-    constexpr int outputLeadSamples = 1024;
-    const int targetOutputSamples = std::min(outputLeadSamples, m_audioBufferSize - 1);
+    const int targetOutputSamples = std::min(OutputLeadSamples, m_audioBufferSize - 1);
 
-    m_cv0.wait(inputLock, [this, outputLeadSamples] {
+    // The device thread notifies without holding the input mutex, so a
+    // notification can land between this predicate check and the actual
+    // sleep. Waking up periodically bounds that race instead of waiting for
+    // the next simulation frame to wake us.
+    const bool ready = m_cv0.wait_for(inputLock, RenderWakeInterval, [this, targetOutputSamples] {
         const bool inputAvailable =
             m_inputChannels[0].data.size() > 0
-            && m_audioBufferedSamples.load() < std::min(outputLeadSamples, m_audioBufferSize - 1);
+            && m_audioBufferedSamples.load() < targetOutputSamples;
         return !m_run || (inputAvailable && !m_processed);
     });
+    if (!ready || !m_run) return;
 
     const int n = std::min(
         std::max(0, targetOutputSamples - m_audioBufferedSamples.load()),
@@ -370,17 +411,32 @@ void Synthesizer::renderAudio() {
         parameters = m_audioParameters;
     }
     std::lock_guard<std::mutex> renderLock(m_renderLock);
+    // These parameters are constant for the whole rendered block. Updating the
+    // leveler once here avoids three stores for every 44.1 kHz output sample.
+#if defined(__ANDROID__)
+    const float safeVolume = std::max(1.0f, std::abs(parameters.volume));
+    m_levelingFilter.p_target = std::min(parameters.levelerTarget, 22000.0f / safeVolume);
+#else
+    m_levelingFilter.p_target = parameters.levelerTarget;
+#endif
+    m_levelingFilter.p_maxLevel = parameters.levelerMaxGain;
+    m_levelingFilter.p_minLevel = parameters.levelerMinGain;
     for (int i = 0; i < m_inputChannelCount; ++i) {
         m_filters[i].airNoiseLowPass.setCutoffFrequency(
             static_cast<float>(parameters.airNoiseFrequencyCutoff), m_audioSampleRate);
         m_filters[i].jitterFilter.setJitterScale(parameters.inputSampleNoise);
     }
 
+    // Convolution is the expensive part. Never hold the output mutex while
+    // doing it: the SDL device callback needs that mutex to consume ready PCM.
+    // Render into preallocated scratch first, then publish the completed block
+    // to the ring buffer in one short critical section.
+    for (int i = 0; i < n; ++i) {
+        m_renderScratch[i] = renderAudio(i, parameters);
+    }
     {
         std::lock_guard<std::mutex> outputLock(m_lock0);
-        for (int i = 0; i < n; ++i) {
-            m_audioBuffer.write(renderAudio(i, parameters));
-        }
+        for (int i = 0; i < n; ++i) m_audioBuffer.write(m_renderScratch[i]);
         m_audioBufferedSamples = static_cast<int>(m_audioBuffer.size());
     }
 
@@ -444,13 +500,13 @@ int16_t Synthesizer::renderAudio(int inputSample, const AudioParameters &paramet
         const float f = f_in - f_dc;
         const float f_p = m_filters[i].derivative.f(f_in);
 
-#if defined(__EMSCRIPTEN__)
+// rand() may serialize through libc's global RNG and is called at audio rate.
+        // The synthesizer already owns an independent xorshift state, so use it
+        // on every platform. This preserves the intended white-noise component
+        // without contending with other threads.
         const float noise = audioRandom(m_audioNoiseState);
-#else
-        const float noise = 2.0 * ((double)rand() / RAND_MAX) - 1.0;
-#endif
         const float r =
-            m_filters->airNoiseLowPass.fast_f(noise);
+            m_filters[i].airNoiseLowPass.fast_f(noise);
         const float r_mixed =
             airNoise * r + (1 - airNoise);
 
@@ -471,21 +527,41 @@ int16_t Synthesizer::renderAudio(int inputSample, const AudioParameters &paramet
         signal += v;
     }
 
+    if (!std::isfinite(signal)) {
+        // Nothing should be able to get here after input sanitising, but a
+        // recursive filter never forgets a NaN: it would turn into permanent
+        // static. Drop the state and keep playing.
+        resetDspState();
+        return 0;
+    }
+
     signal = m_antialiasing.fast_f(signal);
 
-    m_levelingFilter.p_target = parameters.levelerTarget;
-    m_levelingFilter.p_maxLevel = parameters.levelerMaxGain;
-    m_levelingFilter.p_minLevel = parameters.levelerMinGain;
-    const float v_leveled = m_levelingFilter.f(signal) * parameters.volume;
+    float v_leveled = m_levelingFilter.f(signal) * parameters.volume;
+#if defined(__ANDROID__)
+    // Mobile output is intentionally conservative. The old adaptive gain stage
+    // could move rapidly around combustion transients; fixed headroom preserves
+    // waveform continuity and leaves the Android mixer room to work.
+    v_leveled *= 0.72f;
+#endif
     int r_int = std::lround(v_leveled);
-    if (r_int > INT16_MAX) {
-        r_int = INT16_MAX;
-    }
-    else if (r_int < INT16_MIN) {
-        r_int = INT16_MIN;
-    }
+    if (r_int > INT16_MAX) r_int = INT16_MAX;
+    else if (r_int < INT16_MIN) r_int = INT16_MIN;
 
     return static_cast<int16_t>(r_int);
+}
+
+void Synthesizer::resetDspState() {
+    for (int i = 0; i < m_inputChannelCount; ++i) {
+        m_filters[i].convolution.reset();
+        m_filters[i].derivative.reset();
+        m_filters[i].jitterFilter.reset();
+        m_filters[i].airNoiseLowPass.reset();
+        m_filters[i].inputDcFilter.reset();
+    }
+    m_antialiasing.reset();
+    m_levelingFilter.reset();
+    m_dspResetCount.fetch_add(1, std::memory_order_relaxed);
 }
 
 void Synthesizer::renderRealtimeAudio(float *target, int samples) {

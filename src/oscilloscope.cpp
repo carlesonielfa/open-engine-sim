@@ -1,5 +1,7 @@
 #include "../include/oscilloscope.h"
 
+#include <cmath>
+
 #include "../include/geometry_generator.h"
 #include "../include/engine_sim_application.h"
 #include "../include/ui_utilities.h"
@@ -150,8 +152,18 @@ Point Oscilloscope::dataPointToRenderPosition(
     const float width = bounds.width();
     const float height = bounds.height();
 
-    const float s_x = (float)((p.x - m_xMin) / (m_xMax - m_xMin));
-    const float s_y = (float)((p.y - m_yMin) / (m_yMax - m_yMin));
+    // A zero-width range (the dynamically sized scopes start as 0..0) would
+    // divide by zero and put NaN vertices into the geometry, and samples
+    // outside the range would draw lines far outside the scope's own box
+    // (across the bottom of the screen). Keep every point inside the box.
+    const double xRange = m_xMax - m_xMin;
+    const double yRange = m_yMax - m_yMin;
+    float s_x = xRange > 1.0e-30 ? (float)((p.x - m_xMin) / xRange) : 0.5f;
+    float s_y = yRange > 1.0e-30 ? (float)((p.y - m_yMin) / yRange) : 0.5f;
+    if (!std::isfinite(s_x)) s_x = 0.5f;
+    if (!std::isfinite(s_y)) s_y = 0.5f;
+    s_x = std::fmin(1.0f, std::fmax(0.0f, s_x));
+    s_y = std::fmin(1.0f, std::fmax(0.0f, s_y));
 
     const Point local = { s_x * width, s_y * height };
 
@@ -159,6 +171,10 @@ Point Oscilloscope::dataPointToRenderPosition(
 }
 
 void Oscilloscope::addDataPoint(double x, double y) {
+    // A NaN or infinite sample would otherwise poison the auto-ranging below
+    // and every later frame's geometry.
+    if (!std::isfinite(x) || !std::isfinite(y)) return;
+
     m_points[m_writeIndex] = { x, y };
     m_writeIndex = (m_writeIndex + 1) % m_bufferSize;
     m_pointCount = (m_pointCount >= m_bufferSize)

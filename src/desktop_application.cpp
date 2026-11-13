@@ -1,4 +1,9 @@
 #include "../include/engine_sim_application.h"
+#if defined(__ANDROID__)
+#include <csignal>
+extern volatile sig_atomic_t gCrashSubstage;
+extern volatile sig_atomic_t gCrashDetail;
+#endif
 
 #include "../include/combustion_chamber_object.h"
 #include "../include/connecting_rod_object.h"
@@ -12,11 +17,121 @@
 #endif
 
 #include <algorithm>
+#include <cmath>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <sstream>
+
+#if defined(__ANDROID__)
+#include <jni.h>
+extern "C" void *SDL_GetAndroidJNIEnv(void);
+extern "C" void *SDL_GetAndroidActivity(void);
+#endif
 
 namespace {
+#if defined(__ANDROID__)
+void openAndroidEnginePicker() {
+    JNIEnv *env = static_cast<JNIEnv *>(SDL_GetAndroidJNIEnv());
+    jobject activity = static_cast<jobject>(SDL_GetAndroidActivity());
+    if (!env || !activity) return;
+    jclass cls = env->GetObjectClass(activity);
+    jmethodID method = cls ? env->GetMethodID(cls, "openEngineFilePicker", "()V") : nullptr;
+    if (method) env->CallVoidMethod(activity, method);
+    if (env->ExceptionCheck()) env->ExceptionClear();
+    if (cls) env->DeleteLocalRef(cls);
+}
+
+std::string consumeAndroidEngineSelection() {
+    JNIEnv *env = static_cast<JNIEnv *>(SDL_GetAndroidJNIEnv());
+    jobject activity = static_cast<jobject>(SDL_GetAndroidActivity());
+    if (!env || !activity) return {};
+    jclass cls = env->GetObjectClass(activity);
+    jmethodID method = cls ? env->GetMethodID(cls, "consumeSelectedEngineScript", "()Ljava/lang/String;") : nullptr;
+    if (!method) {
+        if (env->ExceptionCheck()) env->ExceptionClear();
+        if (cls) env->DeleteLocalRef(cls);
+        return {};
+    }
+    jstring value = static_cast<jstring>(env->CallObjectMethod(activity, method));
+    std::string result;
+    if (value) {
+        const char *chars = env->GetStringUTFChars(value, nullptr);
+        if (chars) {
+            result = chars;
+            env->ReleaseStringUTFChars(value, chars);
+        }
+        env->DeleteLocalRef(value);
+    }
+    if (env->ExceptionCheck()) env->ExceptionClear();
+    if (cls) env->DeleteLocalRef(cls);
+    return result;
+}
+
+void showAndroidMrDiagnostics(const std::string &message) {
+    JNIEnv *env = static_cast<JNIEnv *>(SDL_GetAndroidJNIEnv());
+    jobject activity = static_cast<jobject>(SDL_GetAndroidActivity());
+    if (!env || !activity) return;
+    jclass cls = env->GetObjectClass(activity);
+    jmethodID method = cls ? env->GetMethodID(cls, "showMrDiagnostics", "(Ljava/lang/String;)V") : nullptr;
+    if (method) {
+        jstring text = env->NewStringUTF(message.c_str());
+        env->CallVoidMethod(activity, method, text);
+        env->DeleteLocalRef(text);
+    }
+    if (env->ExceptionCheck()) env->ExceptionClear();
+    if (cls) env->DeleteLocalRef(cls);
+}
+
+std::string saveAndroidMrLog(const std::string &message) {
+    JNIEnv *env = static_cast<JNIEnv *>(SDL_GetAndroidJNIEnv());
+    jobject activity = static_cast<jobject>(SDL_GetAndroidActivity());
+    if (!env || !activity) return "JNI unavailable";
+    jclass cls = env->GetObjectClass(activity);
+    jmethodID method = cls ? env->GetMethodID(cls, "writeMrLog", "(Ljava/lang/String;)Ljava/lang/String;") : nullptr;
+    std::string result = "writeMrLog unavailable";
+    if (method) {
+        jstring text = env->NewStringUTF(message.c_str());
+        auto returned = static_cast<jstring>(env->CallObjectMethod(activity, method, text));
+        env->DeleteLocalRef(text);
+        if (returned) {
+            const char *chars = env->GetStringUTFChars(returned, nullptr);
+            if (chars) { result = chars; env->ReleaseStringUTFChars(returned, chars); }
+            env->DeleteLocalRef(returned);
+        }
+    }
+    if (env->ExceptionCheck()) env->ExceptionClear();
+    if (cls) env->DeleteLocalRef(cls);
+    return result;
+}
+
+void checkpointAndroidMr(const std::string &message) {
+    JNIEnv *env = static_cast<JNIEnv *>(SDL_GetAndroidJNIEnv());
+    jobject activity = static_cast<jobject>(SDL_GetAndroidActivity());
+    if (!env || !activity) return;
+    jclass cls = env->GetObjectClass(activity);
+    jmethodID method = cls ? env->GetMethodID(cls, "checkpointMrLog", "(Ljava/lang/String;)V") : nullptr;
+    if (method) {
+        jstring text = env->NewStringUTF(message.c_str());
+        env->CallVoidMethod(activity, method, text);
+        env->DeleteLocalRef(text);
+    }
+    if (env->ExceptionCheck()) env->ExceptionClear();
+    if (cls) env->DeleteLocalRef(cls);
+}
+
+void hideAndroidMrDiagnostics() {
+    JNIEnv *env = static_cast<JNIEnv *>(SDL_GetAndroidJNIEnv());
+    jobject activity = static_cast<jobject>(SDL_GetAndroidActivity());
+    if (!env || !activity) return;
+    jclass cls = env->GetObjectClass(activity);
+    jmethodID method = cls ? env->GetMethodID(cls, "hideNativeDiagnostics", "()V") : nullptr;
+    if (method) env->CallVoidMethod(activity, method);
+    if (env->ExceptionCheck()) env->ExceptionClear();
+    if (cls) env->DeleteLocalRef(cls);
+}
+#endif
+
 // Compose the engine below the camera origin independently of user pan state.
 constexpr float EngineViewCompositionOffsetY = -0.12f;
 }
@@ -97,6 +212,13 @@ bool EngineSimApplication::tick() {
     if (m_lastTick == 0) m_lastTick = m_platform->ticks();
 #if defined(__EMSCRIPTEN__)
     constexpr std::uint64_t renderIntervalMs = 0;
+#elif defined(__ANDROID__)
+    // Present at up to ~60 Hz, but never spend more than about half of the
+    // main thread on rendering: the interval follows the measured render time.
+    // Physics and audio are paced from wall time, and the audio-reserve guard
+    // below still postpones a presentation whenever the audio runs short.
+    const std::uint64_t renderIntervalMs = static_cast<std::uint64_t>(
+        std::clamp(2.0f * m_averageRenderMs, 16.0f, 50.0f));
 #else
     constexpr std::uint64_t renderIntervalMs = 50;
 #endif
@@ -105,7 +227,14 @@ bool EngineSimApplication::tick() {
     const std::uint64_t now = m_platform->ticks();
         // Drive physics from elapsed time so synthesis remains in step with
         // wall time and does not accumulate audio latency.
+    #if defined(__ANDROID__)
+    // Do not let a slow render frame create a simulation spiral: once a frame
+    // takes longer, feeding all of that wall time back into physics makes the
+    // next frame even more expensive. Keep audio/physics real-time sized.
+    const float dt = std::min(static_cast<float>(now - m_lastTick) / 1000.0f, 1.0f / 30.0f);
+#else
     const float dt = std::min(static_cast<float>(now - m_lastTick) / 1000.0f, 0.25f);
+#endif
     m_lastTick = now;
     if (dt > 0.0f) {
         m_averageFramerate = 0.9f * m_averageFramerate + 0.1f / dt;
@@ -118,22 +247,175 @@ bool EngineSimApplication::tick() {
     m_screenHeight = m_platform->windowHeight();
 
     if (dt > 0.0f) {
+#if defined(__ANDROID__)
+        if (m_postLoadProbeTicks > 0) {
+            ++m_postLoadTickNumber;
+            checkpointAndroidMr("POST LOAD WINDOW | tick " + std::to_string(m_postLoadTickNumber) + " | antes input");
+        }
+#endif
+#if defined(__ANDROID__)
+        if (m_postLoadProbeTicks > 0) checkpointAndroidMr("POST LOAD WINDOW | entrando processEngineInput");
+#endif
+#if defined(__ANDROID__)
+        gCrashSubstage = 11;
+#endif
         processEngineInput(dt);
+#if defined(__ANDROID__)
+        gCrashSubstage = 15;
+#endif
+#if defined(__ANDROID__)
+        if (m_postLoadProbeTicks > 0 && (m_postLoadTickNumber <= 5 || (m_postLoadTickNumber % 30) == 0))
+            checkpointAndroidMr("POST LOAD WINDOW | tick " + std::to_string(m_postLoadTickNumber) + " | input OK");
+#endif
+#if defined(__ANDROID__)
+        const std::uint64_t processStart = m_platform->ticks();
+#endif
+#if defined(__ANDROID__)
+        if (m_postLoadProbeTicks > 0) checkpointAndroidMr("POST LOAD WINDOW | entrando process");
+#endif
+#if defined(__ANDROID__)
+        gCrashSubstage = 12;
+#endif
         if (!m_paused || m_platform->wasKeyPressed(DesktopKey::Right)) process(dt);
+#if defined(__ANDROID__)
+        gCrashSubstage = 15;
+#endif
+#if defined(__ANDROID__)
+        if (m_postLoadProbeTicks > 0 && (m_postLoadTickNumber <= 5 || (m_postLoadTickNumber % 30) == 0))
+            checkpointAndroidMr("POST LOAD WINDOW | tick " + std::to_string(m_postLoadTickNumber) + " | process OK");
+#endif
+#if defined(__ANDROID__)
+        m_lastProcessMs = static_cast<float>(m_platform->ticks() - processStart);
+        m_processMsThisSecond += m_lastProcessMs;
+#endif
     }
+#if defined(__ANDROID__)
+    if (m_postLoadProbeTicks > 0) checkpointAndroidMr("POST LOAD WINDOW | entrando UI update");
+#endif
+#if defined(__ANDROID__)
+    gCrashSubstage = 13;
+#endif
     if (m_engineView != nullptr) m_uiManager.update(dt);
+#if defined(__ANDROID__)
+    gCrashSubstage = 15;
+#endif
+#if defined(__ANDROID__)
+    if (m_postLoadProbeTicks > 0) checkpointAndroidMr("POST LOAD WINDOW | UI update OK");
+#endif
+#if defined(__ANDROID__)
+    // JNI polling is only needed while the Android document picker is active.
+    // The previous unconditional poll crossed Java/native boundaries every tick.
+    if (m_externalEnginePickerPending && m_pendingScriptPath.empty()
+        && now - m_lastEnginePickerPollTick >= 100) {
+        m_lastEnginePickerPollTick = now;
+        const std::string importedScript = consumeAndroidEngineSelection();
+        if (!importedScript.empty()) {
+            m_pendingScriptPath = importedScript;
+            m_externalEnginePickerPending = false;
+            m_mrDiagnosticMessage = "MR 1/3 SELECTED | " + importedScript;
+            if (m_infoCluster != nullptr) m_infoCluster->setLogMessage(m_mrDiagnosticMessage);
+            m_mrDiagnosticUntilTick = now + 30000;
+        }
+    }
+#endif
     if (!m_pendingScriptPath.empty()) {
         const std::string selectedScript = m_pendingScriptPath;
         m_pendingScriptPath.clear();
-        if (loadScript(selectedScript)) m_currentScriptPath = selectedScript;
+#if defined(__ANDROID__)
+        m_mrDiagnosticMessage = "MR 2/3 COMPILING | " + selectedScript;
+        if (m_infoCluster != nullptr) m_infoCluster->setLogMessage(m_mrDiagnosticMessage);
+        m_mrDiagnosticUntilTick = now + 30000;
+#else
+        if (m_infoCluster != nullptr) m_infoCluster->setLogMessage("MR loading: " + selectedScript);
+#endif
+        if (loadScript(selectedScript)) {
+            m_currentScriptPath = selectedScript;
+#if defined(__ANDROID__)
+            m_mrDiagnosticMessage = "MR 3/3 LOADED OK | " + selectedScript;
+            if (m_infoCluster != nullptr) m_infoCluster->setLogMessage(m_mrDiagnosticMessage);
+            m_mrDiagnosticUntilTick = now + 30000;
+#else
+            if (m_infoCluster != nullptr) m_infoCluster->setLogMessage("MR loaded: " + selectedScript);
+#endif
+        }
     }
     // Rendering is substantially more expensive than the audio-producing
     // simulation on the SDL path. Reserve CPU slices for simulation so
     // the audio stream is never starved by presentation work.
-    if (now - m_lastRenderTick >= renderIntervalMs) {
+    bool renderAllowed = true;
+#if defined(__ANDROID__)
+    // Audio-first scheduler: rendering is the largest burst of work on mobile.
+    // If the convolution worker's ready-to-play reservoir is getting low,
+    // postpone this presentation only. The next tight loop iteration continues
+    // physics/input production immediately, allowing audio to recover without
+    // changing simulation frequency or sound quality.
+    if (m_simulator != nullptr) {
+        constexpr double audioRenderGuardSeconds = 0.080;
+        const double audioReady = m_simulator->getSynthesizerOutputLatency();
+        if (audioReady < audioRenderGuardSeconds) renderAllowed = false;
+    }
+#endif
+    if (renderAllowed && now - m_lastRenderTick >= renderIntervalMs) {
+#if defined(__ANDROID__)
+        const std::uint64_t renderStart = m_platform->ticks();
+#endif
+#if defined(__ANDROID__)
+        if (m_postLoadProbeTicks > 0) checkpointAndroidMr("POST LOAD WINDOW | entrando renderScene");
+#endif
+#if defined(__ANDROID__)
+        gCrashSubstage = 14;
+#endif
         renderScene();
+#if defined(__ANDROID__)
+        gCrashSubstage = 15;
+#endif
+#if defined(__ANDROID__)
+        if (m_postLoadProbeTicks > 0) checkpointAndroidMr("POST LOAD WINDOW | renderScene OK");
+#endif
+#if defined(__ANDROID__)
+        m_lastRenderMs = static_cast<float>(m_platform->ticks() - renderStart);
+        m_averageRenderMs = 0.9f * m_averageRenderMs + 0.1f * m_lastRenderMs;
+        m_renderMsThisSecond += m_lastRenderMs;
+        ++m_rendersThisSecond;
+#endif
         m_lastRenderTick = now;
     }
+#if defined(__ANDROID__)
+    if (m_postLoadProbeTicks > 0) {
+        --m_postLoadProbeTicks;
+        if (m_postLoadFirstProcessDone && m_postLoadFirstRenderDone &&
+            (m_postLoadTickNumber <= 5 || (m_postLoadTickNumber % 30) == 0)) {
+            checkpointAndroidMr("POST LOAD WINDOW | tick " + std::to_string(m_postLoadTickNumber) +
+                " | process + render continuam OK");
+        }
+        if (m_postLoadProbeTicks == 0) {
+            checkpointAndroidMr("POST LOAD WINDOW | 300 ticks estaveis");
+            hideAndroidMrDiagnostics();
+        }
+    }
+        if (m_infoCluster != nullptr && now < m_mrDiagnosticUntilTick && !m_mrDiagnosticMessage.empty()) {
+        m_infoCluster->setLogMessage(m_mrDiagnosticMessage);
+    }
+    if (m_infoCluster != nullptr && now - m_lastPerfReportTick >= 1000 && !m_externalEnginePickerPending && m_pendingScriptPath.empty() && now >= m_mrDiagnosticUntilTick) {
+        const float elapsedMs = std::max(1.0f, static_cast<float>(now - m_lastPerfReportTick));
+        m_lastPerfReportTick = now;
+        const int simHz = m_simulator != nullptr
+            ? static_cast<int>(m_simulator->getSimulationFrequency()) : 0;
+        const int reserveMs = m_simulator != nullptr
+            ? static_cast<int>(1000.0 * (m_simulator->getSynthesizerInputLatency()
+                + m_simulator->getSynthesizerOutputLatency())) : 0;
+        const int fps = static_cast<int>(std::lround(m_rendersThisSecond * 1000.0f / elapsedMs));
+        const int physicsPercent = static_cast<int>(100.0f * m_processMsThisSecond / elapsedMs);
+        const int renderPercent = static_cast<int>(100.0f * m_renderMsThisSecond / elapsedMs);
+        m_rendersThisSecond = 0;
+        m_processMsThisSecond = 0.0f;
+        m_renderMsThisSecond = 0.0f;
+        m_infoCluster->setLogMessage(
+            "ANDROID PERF | " + std::to_string(fps) + " fps | FISICA " + std::to_string(physicsPercent) +
+            "% | RENDER " + std::to_string(renderPercent) + "% | AUDIO " + std::to_string(reserveMs) +
+            "ms | " + std::to_string(simHz) + "Hz");
+    }
+#endif
     return true;
 }
 
@@ -163,24 +445,65 @@ void EngineSimApplication::destroy() {
 
 void EngineSimApplication::process(float dt) {
     if (m_simulator == nullptr) return;
+#if defined(__ANDROID__)
+    const bool probe = m_postLoadProbeTicks > 0 && !m_postLoadFirstProcessDone;
+    if (probe) checkpointAndroidMr("POST LOAD | PROCESS 01 entrando startFrame");
+#endif
     m_simulator->startFrame(dt);
+#if defined(__ANDROID__)
+    if (probe) checkpointAndroidMr("POST LOAD | PROCESS 02 startFrame OK; entrando simulateStep");
+#endif
     while (m_simulator->simulateStep()) {
         if (m_oscCluster != nullptr) m_oscCluster->sample();
     }
+#if defined(__ANDROID__)
+    if (probe) checkpointAndroidMr("POST LOAD | PROCESS 03 simulateStep OK; entrando endFrame");
+#endif
     m_simulator->endFrame();
+#if defined(__ANDROID__)
+    if (probe) {
+        checkpointAndroidMr("POST LOAD | PROCESS 04 primeiro ciclo de simulacao OK");
+        m_postLoadFirstProcessDone = true;
+    }
+#endif
 }
 
 void EngineSimApplication::render() {
+#if defined(__ANDROID__)
+    gCrashDetail = 141;
+#endif
     for (SimulationObject *object : m_objects) object->generateGeometry();
+#if defined(__ANDROID__)
+    gCrashDetail = 142;
+#endif
     for (int sublayer = 0; sublayer < 3; ++sublayer) {
         m_viewParameters.Sublayer = sublayer;
         for (SimulationObject *object : m_objects) object->render(&m_viewParameters);
     }
+#if defined(__ANDROID__)
+    gCrashDetail = 143;
+#endif
     if (m_engineView != nullptr) m_uiManager.render();
+#if defined(__ANDROID__)
+    gCrashDetail = 144;
+#endif
 }
 
 void EngineSimApplication::renderScene() {
+#if defined(__ANDROID__)
+    const bool probe = m_postLoadProbeTicks > 0 && !m_postLoadFirstRenderDone;
+    if (probe) checkpointAndroidMr("POST LOAD | RENDER 01 entrando beginFrame");
+#endif
+#if defined(__ANDROID__)
+    gCrashDetail = 145;
+#endif
     m_renderer->beginFrame(m_shadow);
+#if defined(__ANDROID__)
+    if (probe) checkpointAndroidMr("POST LOAD | RENDER 02 beginFrame OK; gerando geometria/UI");
+#endif
+#if defined(__ANDROID__)
+    gCrashDetail = 146;
+#endif
     m_geometryGenerator.reset();
     if (m_engineView != nullptr) {
         const Bounds windowBounds(static_cast<float>(m_screenWidth), static_cast<float>(m_screenHeight),
@@ -244,11 +567,32 @@ void EngineSimApplication::renderScene() {
             static_cast<float>(m_screenHeight) - m_engineView->m_bounds.top(),
             m_engineView->m_bounds.width(),
             m_engineView->m_bounds.height());
+#if defined(__ANDROID__)
+        gCrashDetail = 147;
+#endif
         render();
     }
+#if defined(__ANDROID__)
+    if (probe) checkpointAndroidMr("POST LOAD | RENDER 03 geometria/UI OK; enviando GPU");
+#endif
+#if defined(__ANDROID__)
+    gCrashDetail = 148;
+#endif
     m_renderer->uploadGeometry(m_geometryGenerator.getVertexData(), m_geometryGenerator.getCurrentVertexCount(),
         m_geometryGenerator.getIndexData(), m_geometryGenerator.getCurrentIndexCount());
+#if defined(__ANDROID__)
+    if (probe) checkpointAndroidMr("POST LOAD | RENDER 04 uploadGeometry OK; entrando endFrame");
+#endif
+#if defined(__ANDROID__)
+    gCrashDetail = 149;
+#endif
     m_renderer->endFrame();
+#if defined(__ANDROID__)
+    if (probe) {
+        checkpointAndroidMr("POST LOAD | RENDER 05 primeiro frame OK");
+        m_postLoadFirstRenderDone = true;
+    }
+#endif
 }
 
 void EngineSimApplication::drawGenerated(const GeometryGenerator::GeometryIndices &indices, int layer) {
@@ -319,43 +663,171 @@ void EngineSimApplication::requestEngineScript(const std::string &relativeScript
 
 bool EngineSimApplication::loadScript(const std::string &relativeScriptPath) {
 #if defined(ATG_ENGINE_SIM_PIRANHA_ENABLED)
-    es_script::Compiler compiler;
-    compiler.initialize(m_assetPath);
     Engine *engine = nullptr;
     Vehicle *vehicle = nullptr;
     Transmission *transmission = nullptr;
-    std::filesystem::path scriptPath = std::filesystem::path(m_assetPath) / relativeScriptPath;
-    std::filesystem::path entryPointPath = scriptPath;
+    const std::filesystem::path scriptPath = std::filesystem::path(m_assetPath) / relativeScriptPath;
+#if defined(__ANDROID__)
+    if (!std::filesystem::exists(scriptPath)) {
+        if (m_infoCluster != nullptr) m_infoCluster->setLogMessage("MR missing: " + scriptPath.string());
+        return false;
+    }
+#endif
+
+    // External .mr files come in two common forms:
+    //  1) complete entry points that already call main();
+    //  2) engine modules that only define public node main (catalog style).
+    // Try the file exactly as authored first. If it does not produce the three
+    // simulator objects, fall back to the catalog wrapper used by packaged engines.
+#if defined(__ANDROID__)
+    std::ostringstream mrTrace;
+    mrTrace << "ARQUIVO: " << relativeScriptPath << "\n";
+    mrTrace << "CAMINHO: " << scriptPath.string() << "\n";
+    mrTrace << "EXISTE: " << (std::filesystem::exists(scriptPath) ? "SIM" : "NAO") << "\n";
+    std::error_code mrSizeError;
+    const auto mrSize = std::filesystem::file_size(scriptPath, mrSizeError);
+    mrTrace << "TAMANHO: " << (mrSizeError ? 0 : mrSize) << " bytes\n\n";
+#endif
+
+    auto compileEntry = [&](const std::filesystem::path &entryPoint) -> bool {
+        es_script::Compiler compiler;
+        compiler.initialize(m_assetPath);
+#if defined(__ANDROID__)
+        mrTrace << "COMPILANDO: " << entryPoint.string() << "\n";
+        checkpointAndroidMr(mrTrace.str() + "\nCHECKPOINT: entrando em compiler.compile()");
+#endif
+        const bool compiled = compiler.compile(entryPoint.string());
+#if defined(__ANDROID__)
+        mrTrace << "compile(): " << (compiled ? "OK" : "FALHOU") << "\n";
+        if (!compiled) {
+            const std::string compilerErrors = compiler.getLastErrorText();
+            mrTrace << "ERRO PIRANHA:\n" << (compilerErrors.empty() ? "(sem texto de erro)" : compilerErrors) << "\n";
+        }
+#endif
+        if (compiled) {
+#if defined(__ANDROID__)
+            checkpointAndroidMr(mrTrace.str() + "\nCHECKPOINT: compile OK; entrando em compiler.execute()");
+#endif
+            const es_script::Compiler::Output output = compiler.execute();
+#if defined(__ANDROID__)
+            mrTrace << "execute(): CONCLUIDO\n";
+            mrTrace << "ENGINE: " << (output.engine ? "OK" : "NULL") << "\n";
+            mrTrace << "VEHICLE: " << (output.vehicle ? "OK" : "NULL") << "\n";
+            mrTrace << "TRANSMISSION: " << (output.transmission ? "OK" : "NULL") << "\n";
+#endif
+#if defined(__ANDROID__)
+            checkpointAndroidMr(mrTrace.str() + "\nCHECKPOINT: execute retornou; validando objetos");
+#endif
+            if (output.engine != nullptr) {
+                configure(output.applicationSettings);
+                engine = output.engine;
+                vehicle = output.vehicle;
+                transmission = output.transmission;
+
+#if defined(__ANDROID__)
+                // Many community .mr files are engine-only modules. Desktop
+                // catalog entries normally provide a vehicle and transmission,
+                // but requiring those objects makes otherwise valid engines
+                // impossible to import on a phone. Supply conservative host
+                // defaults only for the missing pieces.
+                if (vehicle == nullptr) {
+                    vehicle = new Vehicle;
+                    Vehicle::Parameters params{};
+                    params.mass = 1400.0;
+                    params.dragCoefficient = 0.32;
+                    params.crossSectionArea = 2.0;
+                    params.diffRatio = 3.73;
+                    params.tireRadius = 0.31;
+                    params.rollingResistance = 180.0;
+                    vehicle->initialize(params);
+                }
+                if (transmission == nullptr) {
+                    static const double ratios[] = { 3.60, 2.19, 1.41, 1.00, 0.83 };
+                    transmission = new Transmission;
+                    Transmission::Parameters params{};
+                    params.GearCount = 5;
+                    params.GearRatios = ratios;
+                    params.MaxClutchTorque = 680.0;
+                    transmission->initialize(params);
+                }
+#endif
+            }
+        }
+        compiler.destroy();
+        return engine != nullptr && vehicle != nullptr && transmission != nullptr;
+    };
+
+    // Packaged main.mr is an entry point. Imported engines are catalog-style modules:
+    // compiling/executing them directly creates no objects and adds avoidable allocation churn.
+    const bool isUserEngine = relativeScriptPath.rfind("engines/user/", 0) == 0;
+    bool loaded = isUserEngine ? false : compileEntry(scriptPath);
     std::filesystem::path generatedEntryPoint;
-    // Engine files define public node main but do not invoke it. The normal
-    // main.mr does exactly that after importing an engine, so create the same
-    // tiny entry point in the temporary filesystem for a selected catalog item.
-    if (relativeScriptPath != "main.mr") {
+    if (!loaded && relativeScriptPath != "main.mr") {
+#if defined(__ANDROID__)
+        // Keep the wrapper inside the compiler's asset root and import using
+        // the same asset-relative syntax as every bundled engine. Piranha's
+        // Android file resolver is rooted at m_assetPath; feeding it a cache
+        // file that imports an absolute /data/user/... path makes valid
+        // external scripts fail before main() can be executed.
+        generatedEntryPoint = std::filesystem::path(m_assetPath) / "user-engine-entry.mr";
+        std::ofstream entryPoint(generatedEntryPoint);
+        entryPoint << "import \"" << relativeScriptPath << "\"\n\nmain()\n";
+#else
         generatedEntryPoint = std::filesystem::temp_directory_path() / "engine-sim-picker-entry.mr";
         std::ofstream entryPoint(generatedEntryPoint);
         entryPoint << "import \"" << scriptPath.generic_string() << "\"\n\nmain()\n";
+#endif
         entryPoint.close();
-        entryPointPath = generatedEntryPoint;
+        loaded = compileEntry(generatedEntryPoint);
     }
-    if (compiler.compile(entryPointPath.string())) {
-        const es_script::Compiler::Output output = compiler.execute();
-        configure(output.applicationSettings);
-        engine = output.engine;
-        vehicle = output.vehicle;
-        transmission = output.transmission;
-    }
-    compiler.destroy();
     if (!generatedEntryPoint.empty()) {
         std::error_code ignored;
         std::filesystem::remove(generatedEntryPoint, ignored);
     }
-    // A failed hot reload must leave the currently running simulation intact;
-    // otherwise a transient file error turns Return into a destructive reset.
-    if (engine != nullptr && vehicle != nullptr && transmission != nullptr) {
+
+    if (loaded) {
+#if defined(__ANDROID__)
+        checkpointAndroidMr(mrTrace.str() + "\nCHECKPOINT: objetos validos; entrando em loadEngine()");
+#endif
         loadEngine(engine, vehicle, transmission);
+#if defined(__ANDROID__)
+        m_postLoadProbeTicks = 300;
+        m_postLoadTickNumber = 0;
+        m_postLoadFirstProcessDone = false;
+        m_postLoadFirstRenderDone = false;
+        checkpointAndroidMr(mrTrace.str() + "\nCHECKPOINT: loadEngine() CONCLUIDO; iniciando probe pos-load");
+        const std::string mrLogPath = saveAndroidMrLog(mrTrace.str() + "\nLOAD ENGINE: CONCLUIDO\n");
+        showAndroidMrDiagnostics(mrTrace.str() + "\nLOAD ENGINE: CONCLUIDO\nLOG: " + mrLogPath);
+#endif
         return true;
     }
-    if (m_infoCluster != nullptr) m_infoCluster->setLogMessage("Engine script failed to load");
+    if (m_infoCluster != nullptr) {
+        std::string detail = "Engine script failed to load";
+        std::ifstream errorLog("error_log.log");
+        if (errorLog) {
+            std::ostringstream errors;
+            errors << errorLog.rdbuf();
+            std::string message = errors.str();
+            if (!message.empty()) {
+                std::replace(message.begin(), message.end(), '\n', ' ');
+                if (message.size() > 180) message.resize(180);
+                detail += " | " + message;
+            }
+        }
+#if defined(__ANDROID__)
+        mrTrace << "\nRESULTADO: FALHOU\n";
+        mrTrace << "MENSAGEM: " << detail << "\n";
+        mrTrace << "\nSe compile() falhou, o proximo passo e capturar o erro interno do Piranha.";
+        const std::string mrLogPath = saveAndroidMrLog(mrTrace.str());
+        mrTrace << "\nLOG SALVO EM:\n" << mrLogPath << "\n";
+        showAndroidMrDiagnostics(mrTrace.str());
+        m_mrDiagnosticMessage = "MR ERROR | " + detail;
+        m_mrDiagnosticUntilTick = m_platform != nullptr ? m_platform->ticks() + 30000 : 30000;
+        m_infoCluster->setLogMessage(m_mrDiagnosticMessage);
+#else
+        m_infoCluster->setLogMessage(detail);
+#endif
+    }
 #endif
     return false;
 }
@@ -402,6 +874,24 @@ void EngineSimApplication::processEngineInput(float dt) {
     else if (m_platform->isKeyDown(DesktopKey::R)) m_targetSpeedSetting = 1.0;
     else if (fineControl && !consumedWheel) m_targetSpeedSetting = clamp(m_targetSpeedSetting + wheel * 0.0001);
     if (m_touchThrottleHeld) m_targetSpeedSetting = m_touchThrottle;
+    if (m_rpmHold.enabled()) {
+        const bool throttleKeyDown = m_platform->isKeyDown(DesktopKey::Q)
+            || m_platform->isKeyDown(DesktopKey::W)
+            || m_platform->isKeyDown(DesktopKey::E)
+            || m_platform->isKeyDown(DesktopKey::R);
+        const double rpm = m_iceEngine->getRpm();
+        // A stalled engine must not leave the throttle wide open waiting for
+        // a speed it can never reach.
+        m_rpmHoldStallSeconds = rpm < 120.0 ? m_rpmHoldStallSeconds + dt : 0.0;
+        if (throttleKeyDown || m_rpmHoldStallSeconds > 1.5) {
+            m_rpmHold.release();
+            m_rpmHoldStallSeconds = 0.0;
+            log("RPM hold off");
+        }
+        else {
+            m_targetSpeedSetting = m_rpmHold.update(dt, rpm);
+        }
+    }
     m_speedSetting = m_targetSpeedSetting * 0.5 + m_speedSetting * 0.5;
     m_iceEngine->setSpeedControl(m_speedSetting);
 
@@ -450,6 +940,29 @@ void EngineSimApplication::changeGear(int direction) {
     if (m_simulator == nullptr || m_simulator->getTransmission() == nullptr) return;
     Transmission *transmission = m_simulator->getTransmission();
     transmission->changeGear(transmission->getGear() + direction);
+}
+
+void EngineSimApplication::toggleRpmHold() {
+    if (m_iceEngine == nullptr || m_simulator == nullptr) return;
+    if (m_rpmHold.enabled()) {
+        m_rpmHold.release();
+        if (m_infoCluster != nullptr) m_infoCluster->setLogMessage("RPM hold off");
+        return;
+    }
+
+    // Hold whatever the engine is doing right now; the target is then
+    // adjusted by dragging. Round to the same 25 rpm steps the drag uses.
+    const double rpm = m_iceEngine->getRpm();
+    const double target = std::round(rpm / 25.0) * 25.0;
+    m_rpmHoldStallSeconds = 0.0;
+    m_rpmHold.engage(target, m_speedSetting, rpm);
+    if (m_infoCluster != nullptr) {
+        m_infoCluster->setLogMessage("RPM hold " + std::to_string(static_cast<int>(m_rpmHold.targetRpm())));
+    }
+}
+
+void EngineSimApplication::setRpmHoldTargetRpm(double rpm) {
+    if (m_rpmHold.enabled()) m_rpmHold.setTargetRpm(rpm);
 }
 
 void EngineSimApplication::setTouchStarterHeld(bool held) { m_touchStarterHeld = held; }
@@ -505,6 +1018,17 @@ void EngineSimApplication::showControlsOverlay() { m_uiManager.showControlsOverl
 
 void EngineSimApplication::showEnginePickerOverlay() { m_uiManager.showEnginePickerOverlay(); }
 
+void EngineSimApplication::requestExternalEnginePicker() {
+#if defined(__ANDROID__)
+    m_externalEnginePickerPending = true;
+    m_lastEnginePickerPollTick = 0;
+    openAndroidEnginePicker();
+    if (m_infoCluster != nullptr) m_infoCluster->setLogMessage("Select an engine .mr file");
+#else
+    if (m_infoCluster != nullptr) m_infoCluster->setLogMessage("External picker is available on Android");
+#endif
+}
+
 void EngineSimApplication::refreshUserInterface() {
     m_uiManager.destroy();
     m_engineView = nullptr;
@@ -526,15 +1050,45 @@ void EngineSimApplication::refreshUserInterface() {
     m_infoCluster->setEngine(m_iceEngine);
     m_rightGaugeCluster->m_simulator = m_simulator;
     m_rightGaugeCluster->setEngine(m_iceEngine);
+    // refreshUserInterface() can be followed by renderScene() in this same
+    // tick, before UiManager::update() has ever run. Wire nested widgets now.
+    m_rightGaugeCluster->update(0.0f);
     m_oscCluster->setSimulator(m_simulator);
     m_performanceCluster->setSimulator(m_simulator);
     m_loadSimulationCluster->setSimulator(m_simulator);
     m_mixerCluster->setSimulator(m_simulator);
 }
 void EngineSimApplication::loadEngine(Engine *engine, Vehicle *vehicle, Transmission *transmission) {
+#if defined(__ANDROID__)
+    checkpointAndroidMr("LOAD ENGINE | 01 stop audio");
+#endif
+
+#if defined(__ANDROID__)
+    checkpointAndroidMr("LOAD ENGINE 1/10 | parando audio antigo");
+#endif
     if (m_audioOutput != nullptr) m_audioOutput->stop();
+    // Stop and join the synthesizer worker before destroying the simulator or
+    // engine it is reading. Hot-loading while that worker is alive can race
+    // destruction and crash on Android.
+    if (m_simulator != nullptr) m_simulator->endAudioRenderingThread();
+#if defined(__ANDROID__)
+    checkpointAndroidMr("LOAD ENGINE | 02 old audio worker stopped");
+#endif
+
+#if defined(__ANDROID__)
+    checkpointAndroidMr("LOAD ENGINE 2/10 | audio antigo parado; destruindo UI/objetos");
+#endif
     destroyObjects();
-    m_uiManager.destroy();
+#if defined(__ANDROID__)
+    checkpointAndroidMr("LOAD ENGINE | 03 old scene objects destroyed");
+#endif
+
+    // refreshUserInterface() below owns the UI teardown/rebuild. Keeping a
+    // single lifecycle boundary avoids double-destroying reusable UI hosts.
+#if defined(__ANDROID__)
+    checkpointAndroidMr("LOAD ENGINE | 04 UI teardown deferred to refresh");
+#endif
+
     m_engineView = nullptr;
     m_rightGaugeCluster = nullptr;
     m_oscCluster = nullptr;
@@ -543,7 +1097,15 @@ void EngineSimApplication::loadEngine(Engine *engine, Vehicle *vehicle, Transmis
     m_mixerCluster = nullptr;
     m_infoCluster = nullptr;
     if (m_simulator != nullptr) { m_simulator->releaseSimulation(); delete m_simulator; }
+#if defined(__ANDROID__)
+    checkpointAndroidMr("LOAD ENGINE | 05 old simulator released");
+#endif
+
     if (m_iceEngine != nullptr) { m_iceEngine->destroy(); delete m_iceEngine; }
+#if defined(__ANDROID__)
+    checkpointAndroidMr("LOAD ENGINE | 06 old engine destroyed");
+#endif
+
     delete m_vehicle;
     delete m_transmission;
     // The transmission object starts in neutral, but these controls belong to
@@ -554,9 +1116,14 @@ void EngineSimApplication::loadEngine(Engine *engine, Vehicle *vehicle, Transmis
     m_touchThrottle = 0.0;
     m_touchThrottleHeld = false;
     m_touchStarterHeld = false;
+    m_rpmHold.release();
+    m_rpmHoldStallSeconds = 0.0;
     m_clutchPressure = 0.0;
     m_targetClutchPressure = 0.0;
     m_dynoSpeed = 0.0;
+#if defined(__ANDROID__)
+    checkpointAndroidMr("LOAD ENGINE 3/10 | estado antigo destruido; instalando novo engine");
+#endif
     m_iceEngine = engine;
     m_vehicle = vehicle;
     m_transmission = transmission;
@@ -566,26 +1133,103 @@ void EngineSimApplication::loadEngine(Engine *engine, Vehicle *vehicle, Transmis
     const int outputAudioSampleRate = m_audioOutput != nullptr
         ? m_audioOutput->outputSampleRate()
         : 44100;
+#if defined(__ANDROID__)
+    checkpointAndroidMr("LOAD ENGINE 4/10 | criando Simulator");
+#endif
+#if defined(__ANDROID__)
+    checkpointAndroidMr("LOAD ENGINE | 07 creating simulator");
+#endif
     m_simulator = engine->createSimulator(vehicle, transmission, outputAudioSampleRate);
+#if defined(__ANDROID__)
+    checkpointAndroidMr("LOAD ENGINE | 08 simulator created");
+#endif
+
+#if defined(__ANDROID__)
+    checkpointAndroidMr("LOAD ENGINE 5/10 | Simulator criado; configurando simulacao");
+#endif
     m_viewParameters.Layer1 = engine->getMaxDepth();
     engine->calculateDisplacement();
-    // Preserve the script's simulation resolution. Reducing this to 2 kHz
-    // made low-speed combustion arrive in audible, quantized pitch steps.
+#if defined(__ANDROID__)
+    checkpointAndroidMr("LOAD ENGINE | 09 displacement calculated");
+#endif
+
+#if defined(__ANDROID__)
+    // Mobile performance mode. Physics cost scales almost linearly with this
+    // frequency (and cylinder count). 2 kHz was audibly coarse in earlier
+    // experiments; 6 kHz keeps substantially more temporal resolution while
+    // cutting the default 10 kHz LS workload by 55%. 4.5 kHz is the next quality/performance point after the 6 kHz build still dropped below 20 FPS under throttle.
+    // Alpha 15's 4.5 kHz cap is the proven stable performance point on Android.
+    // Do not raise it per engine: the 6 kHz experiment reduced frame rate and
+    // did not fix the malformed-engine issue, so that issue is not a timestep fix.
+    constexpr double AndroidMaxSimulationFrequency = 4500.0;
+    m_simulator->setSimulationFrequency(
+        std::min(engine->getSimulationFrequency(), AndroidMaxSimulationFrequency));
+#else
     m_simulator->setSimulationFrequency(engine->getSimulationFrequency());
-    // SDL owns a stable output lead. Do not speed the simulation up/down to
-    // chase the input reservoir: that feedback loop audibly bends pitch at
-    // low RPM when a render frame varies in duration.
-    m_simulator->setTargetSynthesizerLatency(0.1);
-    m_simulator->setSynthesizerLatencyCorrectionEnabled(false);
+#endif
+    // Hold the audio reserve (queued + ready to play) near 140 ms with a slow
+    // PI trim of at most +/-4% on how many physics steps run (latency_trim.h).
+    // It replaces the old bang-bang correction (+/-10% every frame), which
+    // bent the pitch at low rpm. The reserve must stay above the 80 ms that
+    // the presentation guard in tick() requires, or rendering is skipped, and
+    // below the 200 ms input cap, which discards audio and is heard as a buzz.
+    m_simulator->setTargetSynthesizerLatency(0.14);
+    m_simulator->setSynthesizerLatencyCorrectionEnabled(true);
+    #if defined(__ANDROID__)
+    // Preserve enough simulation history for the audio worker to recover from
+    // short scheduler/render spikes instead of deleting useful input.
+    m_simulator->setMaximumSynthesizerInputLatency(0.20);
+#else
     m_simulator->setMaximumSynthesizerInputLatency(0.03);
+#endif
+#if defined(__ANDROID__)
+    checkpointAndroidMr("LOAD ENGINE 6/10 | simulacao configurada; carregando impulse responses");
+#endif
     for (int i = 0; i < engine->getExhaustSystemCount(); ++i) {
         ImpulseResponse *response = engine->getExhaustSystem(i)->getImpulseResponse();
         if (response != nullptr && m_audioOutput != nullptr) {
             m_audioOutput->loadImpulseResponse(m_simulator->synthesizer(), response->getFilename(), response->getVolume(), i);
         }
     }
+#if defined(__ANDROID__)
+    checkpointAndroidMr("LOAD ENGINE 7/10 | impulse responses OK; iniciando thread de audio");
+#endif
+#if defined(__ANDROID__)
+    checkpointAndroidMr("LOAD ENGINE | 10 impulse responses loaded; starting synth worker");
+#endif
     m_simulator->startAudioRenderingThread();
+#if defined(__ANDROID__)
+    checkpointAndroidMr("LOAD ENGINE | 11 synth worker started");
+#endif
+
+#if defined(__ANDROID__)
+    checkpointAndroidMr("LOAD ENGINE 8/10 | thread de audio OK; iniciando saida SDL");
+#endif
     if (m_audioOutput != nullptr) m_audioOutput->start(m_simulator);
+#if defined(__ANDROID__)
+    checkpointAndroidMr("LOAD ENGINE | 12 SDL audio started");
+#endif
+
+#if defined(__ANDROID__)
+    checkpointAndroidMr("LOAD ENGINE 9/10 | audio SDL OK; criando objetos visuais");
+#endif
+#if defined(__ANDROID__)
+    checkpointAndroidMr("LOAD ENGINE | 13 creating scene objects");
+#endif
     createObjects(engine);
+#if defined(__ANDROID__)
+    checkpointAndroidMr("LOAD ENGINE | 14 scene objects created");
+#endif
+
+#if defined(__ANDROID__)
+    checkpointAndroidMr("LOAD ENGINE | 15 rebuilding UI");
+#endif
     refreshUserInterface();
+#if defined(__ANDROID__)
+    checkpointAndroidMr("LOAD ENGINE | 16 load complete");
+#endif
+
+#if defined(__ANDROID__)
+    checkpointAndroidMr("LOAD ENGINE 10/10 | UI pronta");
+#endif
 }

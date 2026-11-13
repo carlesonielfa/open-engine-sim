@@ -2,6 +2,10 @@
 #include "../include/shaders.h"
 
 #include <SDL3/SDL.h>
+#ifdef __ANDROID__
+#include <android/log.h>
+#include <jni.h>
+#endif
 
 #include <algorithm>
 #include <cstddef>
@@ -16,6 +20,19 @@ namespace {
 // starter begins producing live sample traces.
 constexpr int MaxVertices = 500000;
 constexpr int MaxIndices = 1000000;
+#ifdef __ANDROID__
+void screenRenderStatus(const std::string &s) {
+    JNIEnv *env = static_cast<JNIEnv *>(SDL_GetAndroidJNIEnv());
+    jobject activity = static_cast<jobject>(SDL_GetAndroidActivity());
+    if (!env || !activity) return;
+    jclass cls = env->GetObjectClass(activity);
+    if (!cls) return;
+    jmethodID method = env->GetMethodID(cls, "showRenderDiagnostics", "(Ljava/lang/String;)V");
+    if (method) { jstring text = env->NewStringUTF(s.c_str()); env->CallVoidMethod(activity, method, text); env->DeleteLocalRef(text); }
+    if (env->ExceptionCheck()) env->ExceptionClear();
+    env->DeleteLocalRef(cls);
+}
+#endif
 
 std::vector<std::uint8_t> loadBinaryFile(const std::string &path) {
     std::ifstream file(path, std::ios::binary | std::ios::ate);
@@ -205,6 +222,10 @@ void SdlGpuRenderer::shutdown() {
 }
 
 void SdlGpuRenderer::beginFrame(const ysVector &clearColor) {
+#ifdef __ANDROID__
+    static bool first = true;
+    if (first) { __android_log_print(ANDROID_LOG_INFO, "OpenEngineSimRender", "FIRST beginFrame"); first = false; }
+#endif
     m_clearColor = clearColor;
     m_vertices = nullptr;
     m_indices = nullptr;
@@ -231,6 +252,10 @@ void SdlGpuRenderer::uploadGeometry(
     m_indices = indices;
     m_vertexCount = vertexCount;
     m_indexCount = indexCount;
+#ifdef __ANDROID__
+    static bool firstUpload = true;
+    if (firstUpload) { __android_log_print(ANDROID_LOG_INFO, "OpenEngineSimRender", "FIRST uploadGeometry vertices=%d indices=%d", vertexCount, indexCount); firstUpload = false; }
+#endif
 }
 
 void SdlGpuRenderer::submitGeometry(
@@ -251,10 +276,20 @@ void SdlGpuRenderer::submitGeometry(
 }
 
 void SdlGpuRenderer::endFrame() {
+#ifdef __ANDROID__
+    static int frameNumber = 0; ++frameNumber;
+    if (frameNumber <= 5 || frameNumber == 30 || frameNumber == 120) __android_log_print(ANDROID_LOG_INFO, "OpenEngineSimRender", "endFrame #%d vertices=%d indices=%d submissions=%zu viewport=%.0fx%.0f", frameNumber, m_vertexCount, m_indexCount, m_submissions.size(), m_sceneViewportWidth, m_sceneViewportHeight);
+#endif
     if (m_gpuDevice == nullptr || m_window == nullptr) return;
 
     SDL_GPUCommandBuffer *commands = SDL_AcquireGPUCommandBuffer(m_gpuDevice);
-    if (commands == nullptr) return;
+    if (commands == nullptr) {
+#ifdef __ANDROID__
+        screenRenderStatus("FRAME " + std::to_string(frameNumber) + "\nCOMMAND BUFFER: FALHOU\n" + SDL_GetError());
+        __android_log_print(ANDROID_LOG_ERROR, "OpenEngineSimRender", "AcquireGPUCommandBuffer FAILED: %s", SDL_GetError());
+#endif
+        return;
+    }
 
     if (m_vertexCount > 0 && m_indexCount > 0) {
         void *vertexUpload = SDL_MapGPUTransferBuffer(m_gpuDevice, m_vertexTransferBuffer, true);
@@ -289,6 +324,10 @@ void SdlGpuRenderer::endFrame() {
             commands, static_cast<SDL_Window *>(m_window), &swapchainTexture,
             &swapchainWidth, &swapchainHeight)) {
         SDL_CancelGPUCommandBuffer(commands);
+#ifdef __ANDROID__
+        screenRenderStatus("FRAME " + std::to_string(frameNumber) + "\nSWAPCHAIN: FALHOU\n" + SDL_GetError());
+        __android_log_print(ANDROID_LOG_ERROR, "OpenEngineSimRender", "Acquire swapchain FAILED: %s", SDL_GetError());
+#endif
         return;
     }
 
@@ -318,7 +357,9 @@ void SdlGpuRenderer::endFrame() {
         }
 
         const auto drawStage = [&](SDL_GPURenderPass *pass, std::uint32_t stage) {
-            std::vector<const Submission *> submissions;
+            // Reused every frame: this runs twice per frame over every draw.
+            static thread_local std::vector<const Submission *> submissions;
+            submissions.clear();
             for (const Submission &submission : m_submissions) {
                 if ((submission.stage & stage) != 0) submissions.push_back(&submission);
             }
@@ -358,6 +399,9 @@ void SdlGpuRenderer::endFrame() {
         depthTarget.stencil_store_op = SDL_GPU_STOREOP_DONT_CARE;
         SDL_GPUColorTargetInfo clearTarget = sceneColorTarget;
         clearTarget.texture = swapchainTexture;
+        // Anything the scene blit and the UI do not cover must show the normal
+        // background. A magenta debug clear used to be left here on Android and
+        // showed through at the edges of the screen.
         SDL_GPURenderPass *clearPass = SDL_BeginGPURenderPass(commands, &clearTarget, 1, nullptr);
         if (clearPass != nullptr) SDL_EndGPURenderPass(clearPass);
         SDL_GPURenderPass *scenePass = SDL_BeginGPURenderPass(commands, &sceneColorTarget, 1,
@@ -374,9 +418,25 @@ void SdlGpuRenderer::endFrame() {
         if (scenePass != nullptr) SDL_EndGPURenderPass(scenePass);
 
         if (m_sceneTexture != nullptr) {
+            // Engine Sim lays out the dashboard in logical window coordinates,
+            // while SDL_GPU's Android swapchain is in physical pixels. Scale the
+            // scene destination to the real swapchain instead of blitting 1:1.
+            int logicalWidth = 0;
+            int logicalHeight = 0;
+            SDL_GetWindowSize(static_cast<SDL_Window *>(m_window), &logicalWidth, &logicalHeight);
+            const float scaleX = logicalWidth > 0
+                ? static_cast<float>(swapchainWidth) / static_cast<float>(logicalWidth) : 1.0f;
+            const float scaleY = logicalHeight > 0
+                ? static_cast<float>(swapchainHeight) / static_cast<float>(logicalHeight) : 1.0f;
+            const Uint32 dstX = static_cast<Uint32>(std::max(0.0f, m_sceneViewportX * scaleX));
+            const Uint32 dstY = static_cast<Uint32>(std::max(0.0f, m_sceneViewportY * scaleY));
+            const Uint32 dstW = std::min(swapchainWidth - std::min(dstX, swapchainWidth),
+                std::max(1u, static_cast<Uint32>(m_sceneViewportWidth * scaleX)));
+            const Uint32 dstH = std::min(swapchainHeight - std::min(dstY, swapchainHeight),
+                std::max(1u, static_cast<Uint32>(m_sceneViewportHeight * scaleY)));
             const SDL_GPUBlitInfo blitInfo = {
                 { m_sceneTexture, 0, 0, 0, 0, sceneWidth, sceneHeight },
-                { swapchainTexture, 0, 0, static_cast<Uint32>(m_sceneViewportX), static_cast<Uint32>(m_sceneViewportY), sceneWidth, sceneHeight },
+                { swapchainTexture, 0, 0, dstX, dstY, dstW, dstH },
                 SDL_GPU_LOADOP_LOAD, {}, SDL_FLIP_NONE, SDL_GPU_FILTER_LINEAR, false, 0, 0, 0
             };
             SDL_BlitGPUTexture(commands, &blitInfo);
@@ -392,7 +452,32 @@ void SdlGpuRenderer::endFrame() {
         }
         if (uiPass != nullptr) SDL_EndGPURenderPass(uiPass);
     }
-    SDL_SubmitGPUCommandBuffer(commands);
+    #ifdef __ANDROID__
+    if (frameNumber <= 5 || frameNumber == 30 || frameNumber == 120) __android_log_print(ANDROID_LOG_INFO, "OpenEngineSimRender", "swapchain=%p size=%ux%u sceneTexture=%p depth=%p -> SUBMIT", swapchainTexture, swapchainWidth, swapchainHeight, m_sceneTexture, m_depthTexture);
+    #endif
+    if (!SDL_SubmitGPUCommandBuffer(commands)) {
+#ifdef __ANDROID__
+        screenRenderStatus("FRAME " + std::to_string(frameNumber) + "\nSUBMIT GPU: FALHOU\n" + SDL_GetError());
+        __android_log_print(ANDROID_LOG_ERROR, "OpenEngineSimRender", "SubmitGPUCommandBuffer FAILED: %s", SDL_GetError());
+#endif
+    }
+#ifdef __ANDROID__
+    if (frameNumber == 1 || frameNumber == 5 || frameNumber == 30 || frameNumber == 120) {
+        std::string status =
+            "FRAME: " + std::to_string(frameNumber) +
+            "\nBEGIN FRAME: OK" +
+            "\nVERTICES: " + std::to_string(m_vertexCount) +
+            "\nINDICES: " + std::to_string(m_indexCount) +
+            "\nSUBMISSIONS: " + std::to_string(m_submissions.size()) +
+            "\nVIEWPORT: " + std::to_string((int)m_sceneViewportWidth) + " x " + std::to_string((int)m_sceneViewportHeight) +
+            "\nSWAPCHAIN: " + std::to_string(swapchainWidth) + " x " + std::to_string(swapchainHeight) +
+            "\nSCENE TEXTURE: " + std::string(m_sceneTexture ? "OK" : "NULL") +
+            "\nDEPTH TEXTURE: " + std::string(m_depthTexture ? "OK" : "NULL") +
+            "\nSUBMIT GPU: OK" +
+            "\nTEST CLEAR: MAGENTA";
+        screenRenderStatus(status);
+    }
+#endif
 }
 
 const char *SdlGpuRenderer::lastError() const {
